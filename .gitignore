@@ -86,6 +86,10 @@ appsettings.Local.json
 *.mdf
 *.ldf
 *.ndf
+*.db
+*.db-shm
+*.db-wal
+Snappers.db*
 
 # Migrations (optional - uncomment if you want to ignore migrations)
 # **/Migrations/
