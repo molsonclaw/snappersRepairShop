@@ -1,0 +1,137 @@
+@page "/customers"
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Office,Technician")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Customers - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h4">
+                <MudIcon Icon="@Icons.Material.Filled.People" Class="mr-2" />
+                Customers
+            </MudText>
+            <MudButton Href="/customers/create" Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.PersonAdd">
+                New Customer
+            </MudButton>
+        </MudStack>
+
+        <MudTextField @bind-Value="searchText" Label="Search" Placeholder="Search by name, phone, email..."
+                      Variant="Variant.Outlined" Immediate="true" Class="mb-4"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        @if (isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            <MudDataGrid T="Customer" Items="@FilteredCustomers" Dense="true" Hover="true"
+                         RowsPerPage="25" Elevation="0" SortMode="SortMode.Single"
+                         RowClick="OnRowClick">
+                <Columns>
+                    <PropertyColumn Property="x => x.FullName" Title="Name" />
+                    <PropertyColumn Property="x => x.Phone" Title="Phone" />
+                    <PropertyColumn Property="x => x.Email" Title="Email" />
+                    <PropertyColumn Property="x => x.City" Title="City" />
+                    <TemplateColumn Title="Vehicles">
+                        <CellTemplate>
+                            <MudChip T="string" Size="Size.Small">@context.Item.Vehicles.Count</MudChip>
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <TemplateColumn Title="Actions" Sortable="false">
+                        <CellTemplate Context="cellContext">
+                            <MudStack Row="true" Spacing="1">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Info"
+                                               Href="@($"/customers/edit/{cellContext.Item.CustomerId}")" />
+                                <AuthorizeView Roles="Admin" Context="authContext">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                   OnClick="@(() => DeleteCustomer(cellContext.Item))" />
+                                </AuthorizeView>
+                            </MudStack>
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+                <PagerContent>
+                    <MudDataGridPager T="Customer" />
+                </PagerContent>
+            </MudDataGrid>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private List<Customer> customers = new();
+    private bool isLoading = true;
+    private string searchText = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        customers = await DbContext.Customers
+            .Include(c => c.Vehicles)
+            .OrderBy(c => c.LastName).ThenBy(c => c.FirstName)
+            .ToListAsync();
+        isLoading = false;
+    }
+
+    private IEnumerable<Customer> FilteredCustomers
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(searchText))
+                return customers;
+
+            var search = searchText.ToLower();
+            return customers.Where(c =>
+                c.FullName.ToLower().Contains(search) ||
+                c.Phone.ToLower().Contains(search) ||
+                (c.Email?.ToLower().Contains(search) ?? false) ||
+                (c.City?.ToLower().Contains(search) ?? false));
+        }
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<Customer> args)
+    {
+        Navigation.NavigateTo($"/customers/edit/{args.Item.CustomerId}");
+    }
+
+    private async Task DeleteCustomer(Customer customer)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, $"Delete customer {customer.FullName}? This cannot be undone. Customers with work orders cannot be deleted." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.Color, Color.Error }
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            try
+            {
+                var hasWorkOrders = await DbContext.WorkOrders.AnyAsync(w => w.CustomerId == customer.CustomerId);
+                if (hasWorkOrders)
+                {
+                    Snackbar.Add("Cannot delete customer with existing work orders", Severity.Error);
+                    return;
+                }
+
+                DbContext.Customers.Remove(customer);
+                await DbContext.SaveChangesAsync();
+                customers.Remove(customer);
+                Snackbar.Add($"Customer {customer.FullName} deleted", Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error deleting customer: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

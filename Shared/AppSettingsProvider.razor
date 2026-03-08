@@ -1,0 +1,85 @@
+@using SnappersRepairShop.Services
+@inject SettingsService SettingsService
+@implements IDisposable
+
+<CascadingValue Value="BillingEnabled" Name="BillingEnabled">
+    <CascadingValue Value="Settings" Name="AppSettings">
+        @ChildContent
+    </CascadingValue>
+</CascadingValue>
+
+@code {
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// Cascading parameter: Whether billing features are enabled
+    /// </summary>
+    public bool BillingEnabled { get; private set; }
+
+    /// <summary>
+    /// Cascading parameter: Full application settings
+    /// </summary>
+    public AppSettings? Settings { get; private set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Load initial settings
+            await LoadSettingsAsync();
+
+            // Subscribe to settings changes
+            SettingsService.OnSettingsChanged += OnSettingsChanged;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading settings: {ex}");
+            // Set defaults if loading fails
+            Settings = new AppSettings();
+            BillingEnabled = false;
+        }
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        try
+        {
+            Settings = await SettingsService.GetSettingsAsync();
+            if (Settings != null)
+            {
+                BillingEnabled = Settings.BillingEnabled;
+            }
+            else
+            {
+                Settings = new AppSettings();
+                BillingEnabled = false;
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in LoadSettingsAsync: {ex}");
+            Settings = new AppSettings();
+            BillingEnabled = false;
+        }
+    }
+
+    private async void OnSettingsChanged()
+    {
+        try
+        {
+            await LoadSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in OnSettingsChanged: {ex}");
+        }
+    }
+
+    public void Dispose()
+    {
+        SettingsService.OnSettingsChanged -= OnSettingsChanged;
+    }
+}
+

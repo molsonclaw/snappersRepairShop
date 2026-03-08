@@ -1,0 +1,159 @@
+@page "/vehicles/create"
+@page "/vehicles/edit/{VehicleId:int}"
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Office,Technician")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>@(IsEditMode ? "Edit Vehicle" : "New Vehicle") - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h4" Class="mb-4">
+            <MudIcon Icon="@(IsEditMode ? Icons.Material.Filled.Edit : Icons.Material.Filled.DirectionsCar)" Class="mr-2" />
+            @(IsEditMode ? "Edit Vehicle" : "New Vehicle")
+        </MudText>
+
+        <EditForm Model="@vehicle" OnValidSubmit="HandleSubmit">
+            <DataAnnotationsValidator />
+
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudSelect T="int" @bind-Value="vehicle.CustomerId" Label="Owner" Required="true"
+                               Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+                        @foreach (var customer in customers)
+                        {
+                            <MudSelectItem T="int" Value="customer.CustomerId">
+                                @customer.FullName (@customer.Phone)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudNumericField @bind-Value="vehicle.Year" Label="Year" Required="true"
+                                     Min="1900" Max="2100" Variant="Variant.Outlined"
+                                     For="@(() => vehicle.Year)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="vehicle.Make" Label="Make" Required="true"
+                                  Variant="Variant.Outlined" For="@(() => vehicle.Make)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="vehicle.Model" Label="Model" Required="true"
+                                  Variant="Variant.Outlined" For="@(() => vehicle.Model)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="vehicle.VIN" Label="VIN (17 characters)" Required="true"
+                                  MaxLength="17" Variant="Variant.Outlined" For="@(() => vehicle.VIN)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="vehicle.LicensePlate" Label="License Plate"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="vehicle.Color" Label="Color"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="vehicle.EngineType" Label="Engine Type"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudNumericField @bind-Value="vehicle.Mileage" Label="Mileage"
+                                     Min="0" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="vehicle.Notes" Label="Notes" Lines="3"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            <MudDivider Class="my-4" />
+
+            <MudStack Row="true" Spacing="2" Justify="Justify.SpaceBetween">
+                <MudButton Variant="Variant.Outlined" OnClick="@(() => Navigation.NavigateTo("/vehicles"))">
+                    Cancel
+                </MudButton>
+                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="@isSaving">
+                    @if (isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                        <span>Saving...</span>
+                    }
+                    else
+                    {
+                        <span>@(IsEditMode ? "Update" : "Create") Vehicle</span>
+                    }
+                </MudButton>
+            </MudStack>
+        </EditForm>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Parameter] public int? VehicleId { get; set; }
+
+    private Vehicle vehicle = new();
+    private List<Customer> customers = new();
+    private bool isSaving = false;
+    private bool IsEditMode => VehicleId.HasValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        customers = await DbContext.Customers.OrderBy(c => c.LastName).ThenBy(c => c.FirstName).ToListAsync();
+
+        if (IsEditMode)
+        {
+            var existing = await DbContext.Vehicles.FindAsync(VehicleId.Value);
+            if (existing == null)
+            {
+                Snackbar.Add("Vehicle not found", Severity.Error);
+                Navigation.NavigateTo("/vehicles");
+                return;
+            }
+            vehicle = existing;
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (vehicle.CustomerId == 0)
+        {
+            Snackbar.Add("Please select an owner", Severity.Warning);
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            if (IsEditMode)
+            {
+                vehicle.ModifiedDate = DateTime.UtcNow;
+                DbContext.Vehicles.Update(vehicle);
+            }
+            else
+            {
+                vehicle.CreatedDate = DateTime.UtcNow;
+                DbContext.Vehicles.Add(vehicle);
+            }
+
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"{vehicle.DisplayName} saved successfully", Severity.Success);
+            Navigation.NavigateTo("/vehicles");
+        }
+        catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("IX_Vehicles_VIN") == true)
+        {
+            Snackbar.Add("A vehicle with this VIN already exists", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving vehicle: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

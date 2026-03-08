@@ -1,0 +1,139 @@
+@page "/vehicles"
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Office,Technician")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Vehicles - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h4">
+                <MudIcon Icon="@Icons.Material.Filled.DirectionsCar" Class="mr-2" />
+                Vehicles
+            </MudText>
+            <MudButton Href="/vehicles/create" Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Add">
+                New Vehicle
+            </MudButton>
+        </MudStack>
+
+        <MudTextField @bind-Value="searchText" Label="Search" Placeholder="Search by make, model, VIN, plate, owner..."
+                      Variant="Variant.Outlined" Immediate="true" Class="mb-4"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        @if (isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            <MudDataGrid T="Vehicle" Items="@FilteredVehicles" Dense="true" Hover="true"
+                         RowsPerPage="25" Elevation="0" SortMode="SortMode.Single"
+                         RowClick="OnRowClick">
+                <Columns>
+                    <TemplateColumn Title="Vehicle" Sortable="true">
+                        <CellTemplate>
+                            @context.Item.Year @context.Item.Make @context.Item.Model
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <PropertyColumn Property="x => x.Customer.FullName" Title="Owner" />
+                    <PropertyColumn Property="x => x.LicensePlate" Title="Plate" />
+                    <PropertyColumn Property="x => x.VIN" Title="VIN" />
+                    <PropertyColumn Property="x => x.Color" Title="Color" />
+                    <TemplateColumn Title="Actions" Sortable="false">
+                        <CellTemplate Context="cellContext">
+                            <MudStack Row="true" Spacing="1">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Info"
+                                               Href="@($"/vehicles/edit/{cellContext.Item.VehicleId}")" />
+                                <AuthorizeView Roles="Admin" Context="authContext">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                                   OnClick="@(() => DeleteVehicle(cellContext.Item))" />
+                                </AuthorizeView>
+                            </MudStack>
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+                <PagerContent>
+                    <MudDataGridPager T="Vehicle" />
+                </PagerContent>
+            </MudDataGrid>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private List<Vehicle> vehicles = new();
+    private bool isLoading = true;
+    private string searchText = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        vehicles = await DbContext.Vehicles
+            .Include(v => v.Customer)
+            .OrderBy(v => v.Make).ThenBy(v => v.Model)
+            .ToListAsync();
+        isLoading = false;
+    }
+
+    private IEnumerable<Vehicle> FilteredVehicles
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(searchText))
+                return vehicles;
+
+            var search = searchText.ToLower();
+            return vehicles.Where(v =>
+                v.Make.ToLower().Contains(search) ||
+                v.Model.ToLower().Contains(search) ||
+                v.VIN.ToLower().Contains(search) ||
+                (v.LicensePlate?.ToLower().Contains(search) ?? false) ||
+                v.Customer.FullName.ToLower().Contains(search) ||
+                v.Year.ToString().Contains(search));
+        }
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<Vehicle> args)
+    {
+        Navigation.NavigateTo($"/vehicles/edit/{args.Item.VehicleId}");
+    }
+
+    private async Task DeleteVehicle(Vehicle vehicle)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, $"Delete {vehicle.DisplayName}? Vehicles with work orders cannot be deleted." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.Color, Color.Error }
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            try
+            {
+                var hasWorkOrders = await DbContext.WorkOrders.AnyAsync(w => w.VehicleId == vehicle.VehicleId);
+                if (hasWorkOrders)
+                {
+                    Snackbar.Add("Cannot delete vehicle with existing work orders", Severity.Error);
+                    return;
+                }
+
+                DbContext.Vehicles.Remove(vehicle);
+                await DbContext.SaveChangesAsync();
+                vehicles.Remove(vehicle);
+                Snackbar.Add($"{vehicle.DisplayName} deleted", Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error deleting vehicle: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

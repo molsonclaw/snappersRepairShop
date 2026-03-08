@@ -1,0 +1,1021 @@
+@page "/jobs/new"
+@page "/jobs/edit/{WorkOrderId:int}"
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Technician")]
+@inject ApplicationDbContext DbContext
+@inject BlobStorageService BlobService
+@inject SettingsService SettingsService
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject LicensePlateOcrService OcrService
+@implements IDisposable
+
+<PageTitle>@(IsEditMode ? "Edit Job" : "New Job")</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h4" Class="mb-4">
+            <MudIcon Icon="@Icons.Material.Filled.Build" Class="mr-2" />
+            @(IsEditMode ? "Edit Work Order" : "New Work Order")
+        </MudText>
+
+        <EditForm Model="@workOrder" OnValidSubmit="HandleSubmit">
+            <DataAnnotationsValidator />
+
+            <!-- License Plate Quick Search -->
+            <MudGrid Class="mb-4">
+                <MudItem xs="12">
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.Search" />
+                            <MudTextField @bind-Value="licensePlateSearch"
+                                          Label="Quick Search by License Plate"
+                                          Variant="Variant.Outlined"
+                                          Immediate="true"
+                                          Placeholder="Enter license plate..."
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@Icons.Material.Filled.Search"
+                                          OnAdornmentClick="SearchByLicensePlate"
+                                          OnKeyUp="OnLicensePlateKeyUp"
+                                          Class="flex-grow-1" />
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       OnClick="SearchByLicensePlate"
+                                       StartIcon="@Icons.Material.Filled.Search">
+                                Search
+                            </MudButton>
+                            @if (OcrService.IsConfigured)
+                            {
+                                <input type="file" id="platePhotoInput" accept="image/*" capture="environment"
+                                       @onchange="HandlePlatePhoto" hidden />
+                                <MudButton HtmlTag="label" for="platePhotoInput"
+                                           Variant="Variant.Filled" Color="Color.Secondary"
+                                           StartIcon="@Icons.Material.Filled.PhotoCamera"
+                                           Disabled="@isReadingPlate">
+                                    @if (isReadingPlate)
+                                    {
+                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                        <span>Reading...</span>
+                                    }
+                                    else
+                                    {
+                                        <span>Scan Plate</span>
+                                    }
+                                </MudButton>
+                            }
+                        </MudStack>
+                        @if (!string.IsNullOrWhiteSpace(licensePlateSearchResult))
+                        {
+                            <MudAlert Severity="@licensePlateSearchSeverity" Class="mt-2" Dense="true">
+                                @licensePlateSearchResult
+                            </MudAlert>
+                        }
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+
+            <!-- Customer & Vehicle Selection -->
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudSelect T="int?" Value="selectedCustomerId" ValueChanged="OnCustomerChanged"
+                               Label="Customer" Required="true"
+                               Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+                        <MudSelectItem T="int?" Value="null">-- Select Customer --</MudSelectItem>
+                        @foreach (var customer in customers)
+                        {
+                            <MudSelectItem T="int?" Value="customer.CustomerId">
+                                @customer.FullName (@customer.Phone)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton StartIcon="@Icons.Material.Filled.PersonAdd" Color="Color.Secondary" 
+                               Size="Size.Small" Class="mt-2" OnClick="OpenQuickAddCustomer">
+                        Quick Add Customer
+                    </MudButton>
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudSelect T="int?" @bind-Value="selectedVehicleId" Label="Vehicle" Required="true"
+                               Variant="Variant.Outlined" Disabled="@(selectedCustomerId == null)"
+                               AnchorOrigin="Origin.BottomCenter">
+                        <MudSelectItem T="int?" Value="null">-- Select Vehicle --</MudSelectItem>
+                        @foreach (var vehicle in filteredVehicles)
+                        {
+                            <MudSelectItem T="int?" Value="vehicle.VehicleId">
+                                @vehicle.Year @vehicle.Make @vehicle.Model (@vehicle.LicensePlate)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton StartIcon="@Icons.Material.Filled.DirectionsCar" Color="Color.Secondary" 
+                               Size="Size.Small" Class="mt-2" OnClick="OpenQuickAddVehicle"
+                               Disabled="@(selectedCustomerId == null)">
+                        Quick Add Vehicle
+                    </MudButton>
+                </MudItem>
+
+                <!-- Work Description -->
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="workOrder.Description" Label="Work Performed / Notes" 
+                                  Lines="4" Variant="Variant.Outlined" Required="true" />
+                </MudItem>
+
+                <!-- Technician & Status -->
+                <MudItem xs="12" md="6">
+                    <MudSelect T="string" @bind-Value="workOrder.AssignedTechnicianId" Label="Assigned Technician"
+                               Variant="Variant.Outlined" AnchorOrigin="Origin.BottomCenter">
+                        <MudSelectItem T="string" Value="@((string)null)">-- Unassigned --</MudSelectItem>
+                        @foreach (var tech in technicians)
+                        {
+                            <MudSelectItem T="string" Value="@tech.Id">@tech.Email</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Status</MudText>
+                    <MudChipSet T="string" @bind-SelectedValue="workOrder.Status" Mandatory="true" Filter="true">
+                        <MudChip T="string" Text="Not Started" Color="Color.Default" Value="@("Not Started")" />
+                        <MudChip T="string" Text="In Progress" Color="Color.Info" Value="@("In Progress")" />
+                        <MudChip T="string" Text="Completed" Color="Color.Success" Value="@("Completed")" />
+                        <MudChip T="string" Text="On Hold" Color="Color.Warning" Value="@("On Hold")" />
+                    </MudChipSet>
+                </MudItem>
+
+                <!-- Current Mileage -->
+                <MudItem xs="12" md="6">
+                    <MudNumericField @bind-Value="workOrder.CurrentMileage" Label="Current Mileage (Optional)"
+                                     Variant="Variant.Outlined" Min="0" />
+                </MudItem>
+            </MudGrid>
+
+            <!-- Labor Lines Section -->
+            <MudDivider Class="my-6" />
+            <MudText Typo="Typo.h5" Class="mb-4">
+                <MudIcon Icon="@Icons.Material.Filled.Engineering" Class="mr-2" />
+                Labor Lines
+            </MudText>
+
+            <MudDataGrid T="LaborLine" Items="@laborLines" Elevation="0" Dense="true"
+                         EditMode="DataGridEditMode.Cell" ReadOnly="false" Class="mb-4">
+                <Columns>
+                    <PropertyColumn Property="x => x.Description" Title="Description" IsEditable="true">
+                        <EditTemplate Context="laborContext">
+                            <MudTextField @bind-Value="laborContext.Item.Description" Variant="Variant.Text" />
+                        </EditTemplate>
+                    </PropertyColumn>
+                    <PropertyColumn Property="x => x.Hours" Title="Hours" IsEditable="true">
+                        <EditTemplate Context="laborContext">
+                            <MudNumericField @bind-Value="laborContext.Item.Hours" Variant="Variant.Text" Min="0" Step="0.25M" />
+                        </EditTemplate>
+                    </PropertyColumn>
+                    @* Technicians never see billing fields *@
+                    @if (BillingEnabled && !isTechnician)
+                    {
+                        <PropertyColumn Property="x => x.RatePerHour" Title="Rate/Hour" Format="C2" IsEditable="true">
+                            <EditTemplate Context="laborContext">
+                                <MudNumericField @bind-Value="laborContext.Item.RatePerHour" Variant="Variant.Text"
+                                                 Min="0" Step="5M" Format="C2" />
+                            </EditTemplate>
+                        </PropertyColumn>
+                        <PropertyColumn Property="x => x.Total" Title="Total" Format="C2" />
+                    }
+                    <TemplateColumn>
+                        <CellTemplate Context="laborContext">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                           Color="Color.Error" OnClick="@(() => RemoveLaborLine(laborContext.Item))" />
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+            </MudDataGrid>
+
+            <MudButton StartIcon="@Icons.Material.Filled.Add" Color="Color.Primary"
+                       Variant="Variant.Outlined" OnClick="AddLaborLine">
+                Add Labor Line
+            </MudButton>
+
+            <!-- Parts Used Section -->
+            <MudDivider Class="my-6" />
+            <MudText Typo="Typo.h5" Class="mb-4">
+                <MudIcon Icon="@Icons.Material.Filled.Settings" Class="mr-2" />
+                Parts Used
+            </MudText>
+
+            <MudDataGrid T="PartUsed" Items="@partsUsed" Elevation="0" Dense="true"
+                         EditMode="DataGridEditMode.Cell" ReadOnly="false" Class="mb-4">
+                <Columns>
+                    <PropertyColumn Property="x => x.PartNumber" Title="Part #" IsEditable="true">
+                        <EditTemplate Context="partContext">
+                            <MudTextField @bind-Value="partContext.Item.PartNumber" Variant="Variant.Text" />
+                        </EditTemplate>
+                    </PropertyColumn>
+                    <PropertyColumn Property="x => x.Description" Title="Description" IsEditable="true">
+                        <EditTemplate Context="partContext">
+                            <MudTextField @bind-Value="partContext.Item.Description" Variant="Variant.Text" />
+                        </EditTemplate>
+                    </PropertyColumn>
+                    <PropertyColumn Property="x => x.Quantity" Title="Qty" IsEditable="true">
+                        <EditTemplate Context="partContext">
+                            <MudNumericField @bind-Value="partContext.Item.Quantity" Variant="Variant.Text" Min="1" />
+                        </EditTemplate>
+                    </PropertyColumn>
+                    @* Technicians never see billing fields *@
+                    @if (BillingEnabled && !isTechnician)
+                    {
+                        <PropertyColumn Property="x => x.UnitCost" Title="Unit Price" Format="C2" IsEditable="true">
+                            <EditTemplate Context="partContext">
+                                <MudNumericField @bind-Value="partContext.Item.UnitCost" Variant="Variant.Text"
+                                                 Min="0" Step="1M" Format="C2" />
+                            </EditTemplate>
+                        </PropertyColumn>
+                        <PropertyColumn Property="x => x.Total" Title="Total" Format="C2" />
+                    }
+                    <TemplateColumn>
+                        <CellTemplate Context="partContext">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                           Color="Color.Error" OnClick="@(() => RemovePartUsed(partContext.Item))" />
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+            </MudDataGrid>
+
+            <MudButton StartIcon="@Icons.Material.Filled.Add" Color="Color.Primary"
+                       Variant="Variant.Outlined" OnClick="AddPartUsed">
+                Add Part
+            </MudButton>
+
+            <!-- Photo Upload Section -->
+            <MudDivider Class="my-6" />
+            <MudText Typo="Typo.h5" Class="mb-4">
+                <MudIcon Icon="@Icons.Material.Filled.PhotoCamera" Class="mr-2" />
+                Job Photos
+            </MudText>
+
+            <MudPaper Elevation="0" Class="pa-4 mb-4" Style="border: 2px dashed #ccc; background-color: #f9f9f9;">
+                <InputFile id="fileInput" OnChange="HandleFileSelection" multiple accept="image/*" hidden />
+                <InputFile id="cameraInput" OnChange="HandleFileSelection" accept="image/*" capture="environment" hidden />
+                <MudStack AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Color="Color.Primary" />
+                    <MudText Typo="Typo.body1">Drag & drop photos here or</MudText>
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton HtmlTag="label" for="cameraInput" Variant="Variant.Filled"
+                                   Color="Color.Primary" StartIcon="@Icons.Material.Filled.CameraAlt">
+                            Take Photo
+                        </MudButton>
+                        <MudButton HtmlTag="label" for="fileInput" Variant="Variant.Outlined"
+                                   Color="Color.Primary" StartIcon="@Icons.Material.Filled.Upload">
+                            Browse Files
+                        </MudButton>
+                    </MudStack>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Max 10MB per file • JPG, PNG, GIF, BMP
+                    </MudText>
+                </MudStack>
+            </MudPaper>
+
+            <!-- Photo Previews -->
+            @if (photoUploads.Any())
+            {
+                <MudGrid>
+                    @foreach (var photo in photoUploads)
+                    {
+                        <MudItem xs="12" sm="6" md="4">
+                            <MudCard Elevation="2">
+                                <MudCardMedia Image="@photo.PreviewUrl" Height="200" />
+                                <MudCardContent>
+                                    <MudTextField @bind-Value="photo.Caption" Label="Caption"
+                                                  Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    @if (photo.IsUploading)
+                                    {
+                                        <MudProgressLinear Color="Color.Primary" Value="@photo.Progress"
+                                                           Class="mt-2" />
+                                        <MudText Typo="Typo.caption">@photo.Progress%</MudText>
+                                    }
+                                    else if (photo.IsUploaded)
+                                    {
+                                        <MudAlert Severity="Severity.Success" Dense="true" Class="mt-2">
+                                            Uploaded
+                                        </MudAlert>
+                                    }
+                                </MudCardContent>
+                                <MudCardActions>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                                   OnClick="@(() => RemovePhoto(photo))"
+                                                   Disabled="@photo.IsUploading" />
+                                </MudCardActions>
+                            </MudCard>
+                        </MudItem>
+                    }
+                </MudGrid>
+            }
+
+            <!-- Action Buttons -->
+            <MudDivider Class="my-6" />
+            <MudStack Row="true" Spacing="2" Justify="Justify.SpaceBetween">
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           OnClick="@(() => Navigation.NavigateTo("/workorders"))">
+                    Cancel
+                </MudButton>
+                <MudStack Row="true" Spacing="2">
+                    @if (autoSaveStatus != null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="align-self-center">
+                            @autoSaveStatus
+                        </MudText>
+                    }
+                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled"
+                               Color="Color.Primary" Disabled="@isSaving">
+                        @if (isSaving)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            <span>Saving...</span>
+                        }
+                        else
+                        {
+                            <span>@(IsEditMode ? "Update" : "Create") Work Order</span>
+                        }
+                    </MudButton>
+                </MudStack>
+            </MudStack>
+        </EditForm>
+    </MudPaper>
+</MudContainer>
+
+<!-- Quick Add Customer Dialog -->
+@if (showQuickAddCustomer)
+{
+    <MudDialog @bind-Visible="showQuickAddCustomer" Options="dialogOptions">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Quick Add Customer</MudText>
+        </TitleContent>
+        <DialogContent>
+            <MudStack Spacing="3">
+                <MudTextField @bind-Value="quickCustomer.FirstName" Label="First Name" Required="true" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickCustomer.LastName" Label="Last Name" Required="true" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickCustomer.Phone" Label="Phone" Required="true" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickCustomer.Email" Label="Email" Variant="Variant.Outlined" />
+            </MudStack>
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => showQuickAddCustomer = false)">Cancel</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveQuickCustomer">Save</MudButton>
+        </DialogActions>
+    </MudDialog>
+}
+
+<!-- Quick Add Vehicle Dialog -->
+@if (showQuickAddVehicle)
+{
+    <MudDialog @bind-Visible="showQuickAddVehicle" Options="dialogOptions">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Quick Add Vehicle</MudText>
+        </TitleContent>
+        <DialogContent>
+            <MudStack Spacing="3">
+                <MudNumericField @bind-Value="quickVehicle.Year" Label="Year" Required="true" Min="1900" Max="2100" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickVehicle.Make" Label="Make" Required="true" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickVehicle.Model" Label="Model" Required="true" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickVehicle.VIN" Label="VIN (17 chars)" Required="true"
+                              MaxLength="17" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickVehicle.LicensePlate" Label="License Plate" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="quickVehicle.Color" Label="Color" Variant="Variant.Outlined" />
+            </MudStack>
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => showQuickAddVehicle = false)">Cancel</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveQuickVehicle">Save</MudButton>
+        </DialogActions>
+    </MudDialog>
+}
+
+@code {
+    [Parameter] public int? WorkOrderId { get; set; }
+    [CascadingParameter(Name = "BillingEnabled")] public bool BillingEnabled { get; set; }
+
+    private WorkOrder workOrder = new();
+    private List<Customer> customers = new();
+    private List<Vehicle> vehicles = new();
+    private List<Vehicle> filteredVehicles = new();
+    private List<IdentityUser> technicians = new();
+    private List<LaborLine> laborLines = new();
+    private List<PartUsed> partsUsed = new();
+    private List<PhotoUpload> photoUploads = new();
+
+    private int? selectedCustomerId;
+    private int? selectedVehicleId;
+    private bool isSaving = false;
+    private string? autoSaveStatus;
+    private System.Threading.Timer? autoSaveTimer;
+
+    // Quick add dialogs
+    private bool showQuickAddCustomer = false;
+    private bool showQuickAddVehicle = false;
+    private Customer quickCustomer = new();
+    private Vehicle quickVehicle = new();
+    private DialogOptions dialogOptions = new() { MaxWidth = MaxWidth.Small, FullWidth = true };
+
+    // License plate search
+    private string licensePlateSearch = string.Empty;
+    private string? licensePlateSearchResult;
+    private Severity licensePlateSearchSeverity = Severity.Info;
+
+    private bool IsEditMode => WorkOrderId.HasValue;
+    private decimal defaultLaborRate = 95.00m;
+    private bool isReadingPlate = false;
+    private bool isTechnician = false;
+    private bool isAdmin = false;
+    private string? currentUserId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Get current user and role
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            if (user.Identity?.IsAuthenticated == true)
+            {
+                var identityUser = await UserManager.GetUserAsync(user);
+                if (identityUser != null)
+                {
+                    currentUserId = identityUser.Id;
+                    isTechnician = await UserManager.IsInRoleAsync(identityUser, "Technician");
+                    isAdmin = await UserManager.IsInRoleAsync(identityUser, "Admin");
+                }
+            }
+
+            // Load default labor rate from settings
+            var settings = await SettingsService.GetSettingsAsync();
+            defaultLaborRate = settings.DefaultLaborRate;
+
+            // Load customers and vehicles
+            customers = await DbContext.Customers.OrderBy(c => c.LastName).ToListAsync();
+            vehicles = await DbContext.Vehicles.Include(v => v.Customer).ToListAsync();
+
+            // Load technicians (users with Technician or Admin role)
+            var techRoleUsers = await UserManager.GetUsersInRoleAsync("Technician");
+            var adminRoleUsers = await UserManager.GetUsersInRoleAsync("Admin");
+            technicians = techRoleUsers.Union(adminRoleUsers).Distinct().OrderBy(u => u.Email).ToList();
+
+            if (IsEditMode)
+            {
+                await LoadWorkOrder();
+            }
+            else
+            {
+                // Initialize new work order
+                workOrder.WorkOrderNumber = await GenerateWorkOrderNumber();
+                workOrder.Status = "Not Started";
+                workOrder.DateCreated = DateTime.UtcNow;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading page: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task LoadWorkOrder()
+    {
+        var wo = await DbContext.WorkOrders
+            .Include(w => w.Customer)
+            .Include(w => w.Vehicle)
+            .Include(w => w.LaborLines)
+            .Include(w => w.PartsUsed)
+            .Include(w => w.JobPhotos)
+            .FirstOrDefaultAsync(w => w.WorkOrderId == WorkOrderId);
+
+        if (wo != null)
+        {
+            // Check if technician is trying to edit someone else's work order
+            if (isTechnician && !isAdmin && !string.IsNullOrEmpty(currentUserId))
+            {
+                if (wo.AssignedTechnicianId != currentUserId)
+                {
+                    Snackbar.Add("You can only edit your own work orders", Severity.Error);
+                    Navigation.NavigateTo("/jobs");
+                    return;
+                }
+            }
+
+            workOrder = wo;
+            selectedCustomerId = wo.CustomerId;
+            selectedVehicleId = wo.VehicleId;
+            laborLines = wo.LaborLines.ToList();
+            partsUsed = wo.PartsUsed.ToList();
+
+            await FilterVehiclesByCustomer();
+        }
+    }
+
+    private async Task<string> GenerateWorkOrderNumber()
+    {
+        var lastWorkOrder = await DbContext.WorkOrders
+            .OrderByDescending(w => w.WorkOrderId)
+            .FirstOrDefaultAsync();
+
+        var nextNumber = (lastWorkOrder?.WorkOrderId ?? 0) + 1;
+        return $"WO-{DateTime.UtcNow:yyyyMMdd}-{nextNumber:D4}";
+    }
+
+    private async Task FilterVehiclesByCustomer()
+    {
+        if (selectedCustomerId.HasValue)
+        {
+            filteredVehicles = vehicles.Where(v => v.CustomerId == selectedCustomerId.Value).ToList();
+
+            // Reset vehicle selection if it doesn't belong to selected customer
+            if (selectedVehicleId.HasValue &&
+                !filteredVehicles.Any(v => v.VehicleId == selectedVehicleId.Value))
+            {
+                selectedVehicleId = null;
+            }
+        }
+        else
+        {
+            filteredVehicles = new List<Vehicle>();
+            selectedVehicleId = null;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnCustomerChanged(int? customerId)
+    {
+        selectedCustomerId = customerId;
+        await FilterVehiclesByCustomer();
+    }
+
+    // Labor Lines Management
+    private void AddLaborLine()
+    {
+        laborLines.Add(new LaborLine
+        {
+            Description = "",
+            Hours = 1.0m,
+            RatePerHour = defaultLaborRate,
+            DateAdded = DateTime.UtcNow
+        });
+    }
+
+    private void RemoveLaborLine(LaborLine line)
+    {
+        laborLines.Remove(line);
+    }
+
+    // Parts Used Management
+    private void AddPartUsed()
+    {
+        partsUsed.Add(new PartUsed
+        {
+            PartNumber = "",
+            Description = "",
+            Quantity = 1,
+            UnitCost = 0,
+            DateAdded = DateTime.UtcNow
+        });
+    }
+
+    private void RemovePartUsed(PartUsed part)
+    {
+        partsUsed.Remove(part);
+    }
+
+    // Quick Add Customer
+    private void OpenQuickAddCustomer()
+    {
+        quickCustomer = new Customer();
+        showQuickAddCustomer = true;
+        StateHasChanged();
+    }
+
+    private async Task SaveQuickCustomer()
+    {
+        if (string.IsNullOrWhiteSpace(quickCustomer.FirstName) ||
+            string.IsNullOrWhiteSpace(quickCustomer.LastName) ||
+            string.IsNullOrWhiteSpace(quickCustomer.Phone))
+        {
+            Snackbar.Add("Please fill in required fields", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            quickCustomer.CreatedDate = DateTime.UtcNow;
+            DbContext.Customers.Add(quickCustomer);
+            await DbContext.SaveChangesAsync();
+
+            customers.Add(quickCustomer);
+            customers = customers.OrderBy(c => c.LastName).ToList();
+            selectedCustomerId = quickCustomer.CustomerId;
+
+            await FilterVehiclesByCustomer();
+
+            showQuickAddCustomer = false;
+            Snackbar.Add($"Customer {quickCustomer.FullName} added successfully", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving customer: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // Quick Add Vehicle
+    private void OpenQuickAddVehicle()
+    {
+        quickVehicle = new Vehicle { CustomerId = selectedCustomerId!.Value };
+        showQuickAddVehicle = true;
+        StateHasChanged();
+    }
+
+    private async Task SaveQuickVehicle()
+    {
+        if (quickVehicle.Year < 1900 || string.IsNullOrWhiteSpace(quickVehicle.Make) ||
+            string.IsNullOrWhiteSpace(quickVehicle.Model) || string.IsNullOrWhiteSpace(quickVehicle.VIN))
+        {
+            Snackbar.Add("Please fill in required fields", Severity.Warning);
+            return;
+        }
+
+        if (quickVehicle.VIN.Length != 17)
+        {
+            Snackbar.Add("VIN must be exactly 17 characters", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            quickVehicle.CustomerId = selectedCustomerId!.Value;
+            quickVehicle.CreatedDate = DateTime.UtcNow;
+            DbContext.Vehicles.Add(quickVehicle);
+            await DbContext.SaveChangesAsync();
+
+            vehicles.Add(quickVehicle);
+            await FilterVehiclesByCustomer();
+            selectedVehicleId = quickVehicle.VehicleId;
+
+            showQuickAddVehicle = false;
+            Snackbar.Add($"Vehicle {quickVehicle.Year} {quickVehicle.Make} {quickVehicle.Model} added successfully",
+                Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving vehicle: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // License Plate Search
+    private async Task OnLicensePlateKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchByLicensePlate();
+        }
+    }
+
+    private async Task HandlePlatePhoto()
+    {
+        isReadingPlate = true;
+        StateHasChanged();
+
+        try
+        {
+            var base64 = await JS.InvokeAsync<string?>("licensePlateCamera.getBase64FromInput", "platePhotoInput");
+            if (string.IsNullOrEmpty(base64))
+            {
+                Snackbar.Add("No photo captured", Severity.Warning);
+                return;
+            }
+
+            var plateText = await OcrService.ReadLicensePlateAsync(base64);
+            if (!string.IsNullOrEmpty(plateText))
+            {
+                licensePlateSearch = plateText;
+                Snackbar.Add($"Detected plate: {plateText}", Severity.Info);
+                await SearchByLicensePlate();
+            }
+            else
+            {
+                Snackbar.Add("Could not read plate text from photo. Try again or type it manually.", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error reading plate: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isReadingPlate = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SearchByLicensePlate()
+    {
+        licensePlateSearchResult = null;
+
+        if (string.IsNullOrWhiteSpace(licensePlateSearch))
+        {
+            licensePlateSearchSeverity = Severity.Warning;
+            licensePlateSearchResult = "Please enter a license plate number";
+            return;
+        }
+
+        // Search for vehicle by license plate
+        var vehicle = await DbContext.Vehicles
+            .Include(v => v.Customer)
+            .FirstOrDefaultAsync(v => v.LicensePlate.ToLower() == licensePlateSearch.Trim().ToLower());
+
+        if (vehicle != null)
+        {
+            // Found! Select the customer and vehicle
+            selectedCustomerId = vehicle.CustomerId;
+            await FilterVehiclesByCustomer();
+            selectedVehicleId = vehicle.VehicleId;
+
+            licensePlateSearchSeverity = Severity.Success;
+            licensePlateSearchResult = $"Found: {vehicle.Customer.FullName} - {vehicle.Year} {vehicle.Make} {vehicle.Model}";
+            Snackbar.Add("Vehicle found and selected!", Severity.Success);
+        }
+        else
+        {
+            // Not found - offer to create new customer
+            licensePlateSearchSeverity = Severity.Info;
+            licensePlateSearchResult = $"No vehicle found with plate '{licensePlateSearch}'. Click 'Quick Add Customer' to create a new customer and vehicle.";
+
+            // Pre-fill the license plate in the quick add vehicle form
+            quickVehicle.LicensePlate = licensePlateSearch.Trim().ToUpper();
+        }
+
+        StateHasChanged();
+    }
+
+    // Photo Upload Management
+    private async Task HandleFileSelection(InputFileChangeEventArgs e)
+    {
+        var maxFiles = 10;
+        var files = e.GetMultipleFiles(maxFiles);
+
+        foreach (var file in files)
+        {
+            // Validate file size (10MB max)
+            if (file.Size > 10 * 1024 * 1024)
+            {
+                Snackbar.Add($"File {file.Name} exceeds 10MB limit", Severity.Warning);
+                continue;
+            }
+
+            // Create preview URL
+            var buffer = new byte[file.Size];
+            await file.OpenReadStream(10 * 1024 * 1024).ReadAsync(buffer);
+            var base64 = Convert.ToBase64String(buffer);
+            var previewUrl = $"data:{file.ContentType};base64,{base64}";
+
+            var photoUpload = new PhotoUpload
+            {
+                File = file,
+                FileName = file.Name,
+                ContentType = file.ContentType,
+                PreviewUrl = previewUrl,
+                Caption = "",
+                Progress = 0,
+                IsUploading = false,
+                IsUploaded = false
+            };
+
+            photoUploads.Add(photoUpload);
+        }
+
+        StateHasChanged();
+    }
+
+    private void RemovePhoto(PhotoUpload photo)
+    {
+        photoUploads.Remove(photo);
+    }
+
+    // Auto-save functionality
+    private async Task AutoSave()
+    {
+        if (isSaving || !selectedCustomerId.HasValue || !selectedVehicleId.HasValue)
+            return;
+
+        try
+        {
+            autoSaveStatus = "Auto-saving...";
+            await InvokeAsync(StateHasChanged);
+
+            // Save draft logic would go here
+            // For now, just update the status
+            await Task.Delay(500);
+
+            autoSaveStatus = $"Draft saved at {DateTime.Now:HH:mm:ss}";
+            await InvokeAsync(StateHasChanged);
+
+            // Clear status after 3 seconds
+            await Task.Delay(3000);
+            autoSaveStatus = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            // Silent fail for auto-save
+            Console.WriteLine($"Auto-save failed: {ex.Message}");
+        }
+    }
+
+    // Main Submit Handler
+    private async Task HandleSubmit()
+    {
+        if (!selectedCustomerId.HasValue || !selectedVehicleId.HasValue)
+        {
+            Snackbar.Add("Please select a customer and vehicle", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(workOrder.Description))
+        {
+            Snackbar.Add("Please enter work description", Severity.Warning);
+            return;
+        }
+
+        isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            using var transaction = await DbContext.Database.BeginTransactionAsync();
+
+            try
+            {
+                // Set customer and vehicle
+                workOrder.CustomerId = selectedCustomerId.Value;
+                workOrder.VehicleId = selectedVehicleId.Value;
+
+                // Update timestamps based on status
+                if (workOrder.Status == "In Progress" && !workOrder.DateStarted.HasValue)
+                {
+                    workOrder.DateStarted = DateTime.UtcNow;
+                }
+                else if (workOrder.Status == "Completed" && !workOrder.DateCompleted.HasValue)
+                {
+                    workOrder.DateCompleted = DateTime.UtcNow;
+                }
+
+                // Calculate labor totals
+                foreach (var labor in laborLines)
+                {
+                    labor.CalculateTotal();
+                }
+
+                // Calculate parts totals
+                foreach (var part in partsUsed)
+                {
+                    part.CalculateTotal();
+                }
+
+                // Calculate work order totals (only if billing enabled)
+                if (BillingEnabled)
+                {
+                    workOrder.LaborTotal = laborLines.Sum(l => l.Total);
+                    workOrder.PartsTotal = partsUsed.Sum(p => p.Total);
+                    var subtotal = workOrder.LaborTotal + workOrder.PartsTotal;
+
+                    var settings = await SettingsService.GetSettingsAsync();
+                    workOrder.TaxAmount = subtotal * settings.TaxRate;
+                    workOrder.GrandTotal = subtotal + workOrder.TaxAmount;
+                }
+
+                if (IsEditMode)
+                {
+                    // Update existing work order
+                    workOrder.ModifiedDate = DateTime.UtcNow;
+                    DbContext.WorkOrders.Update(workOrder);
+
+                    // Remove old labor lines and parts
+                    var existingLabor = DbContext.LaborLines.Where(l => l.WorkOrderId == workOrder.WorkOrderId);
+                    DbContext.LaborLines.RemoveRange(existingLabor);
+
+                    var existingParts = DbContext.PartsUsed.Where(p => p.WorkOrderId == workOrder.WorkOrderId);
+                    DbContext.PartsUsed.RemoveRange(existingParts);
+                }
+                else
+                {
+                    // Create new work order
+                    DbContext.WorkOrders.Add(workOrder);
+                }
+
+                await DbContext.SaveChangesAsync();
+
+                // Add labor lines
+                foreach (var labor in laborLines)
+                {
+                    labor.WorkOrderId = workOrder.WorkOrderId;
+                    DbContext.LaborLines.Add(labor);
+                }
+
+                // Add parts used
+                foreach (var part in partsUsed)
+                {
+                    part.WorkOrderId = workOrder.WorkOrderId;
+                    DbContext.PartsUsed.Add(part);
+                }
+
+                await DbContext.SaveChangesAsync();
+
+                // Upload photos
+                if (photoUploads.Any(p => !p.IsUploaded))
+                {
+                    await UploadPhotos();
+                }
+
+                await transaction.CommitAsync();
+
+                Snackbar.Add($"Work Order {workOrder.WorkOrderNumber} saved successfully!", Severity.Success);
+                Navigation.NavigateTo("/jobs");
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving work order: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    // Upload photos to blob storage
+    private async Task UploadPhotos()
+    {
+        var photosToUpload = photoUploads.Where(p => !p.IsUploaded).ToList();
+
+        foreach (var photo in photosToUpload)
+        {
+            try
+            {
+                photo.IsUploading = true;
+                await InvokeAsync(StateHasChanged);
+
+                var progress = new Progress<double>(percent =>
+                {
+                    photo.Progress = (int)percent;
+                    InvokeAsync(StateHasChanged);
+                });
+
+                using var stream = photo.File.OpenReadStream(10 * 1024 * 1024);
+
+                var jobPhoto = await BlobService.UploadJobPhotoAsync(
+                    workOrderId: workOrder.WorkOrderId,
+                    photoStream: stream,
+                    fileName: photo.FileName,
+                    contentType: photo.ContentType,
+                    caption: photo.Caption,
+                    uploadedByUserId: null, // TODO: Get current user ID
+                    progress: progress
+                );
+
+                photo.IsUploading = false;
+                photo.IsUploaded = true;
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                photo.IsUploading = false;
+                Snackbar.Add($"Failed to upload {photo.FileName}: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        autoSaveTimer?.Dispose();
+    }
+
+    // Helper class for photo uploads
+    private class PhotoUpload
+    {
+        public IBrowserFile File { get; set; } = null!;
+        public string FileName { get; set; } = string.Empty;
+        public string ContentType { get; set; } = string.Empty;
+        public string PreviewUrl { get; set; } = string.Empty;
+        public string Caption { get; set; } = string.Empty;
+        public int Progress { get; set; }
+        public bool IsUploading { get; set; }
+        public bool IsUploaded { get; set; }
+    }
+}
+

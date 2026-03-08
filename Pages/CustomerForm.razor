@@ -1,0 +1,138 @@
+@page "/customers/create"
+@page "/customers/edit/{CustomerId:int}"
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Office,Technician")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>@(IsEditMode ? "Edit Customer" : "New Customer") - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h4" Class="mb-4">
+            <MudIcon Icon="@(IsEditMode ? Icons.Material.Filled.Edit : Icons.Material.Filled.PersonAdd)" Class="mr-2" />
+            @(IsEditMode ? "Edit Customer" : "New Customer")
+        </MudText>
+
+        <EditForm Model="@customer" OnValidSubmit="HandleSubmit">
+            <DataAnnotationsValidator />
+
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="customer.FirstName" Label="First Name" Required="true"
+                                  Variant="Variant.Outlined" For="@(() => customer.FirstName)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="customer.LastName" Label="Last Name" Required="true"
+                                  Variant="Variant.Outlined" For="@(() => customer.LastName)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="customer.CompanyName" Label="Company Name"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="customer.Phone" Label="Phone" Required="true"
+                                  Variant="Variant.Outlined" For="@(() => customer.Phone)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="customer.Email" Label="Email"
+                                  Variant="Variant.Outlined" For="@(() => customer.Email)" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="customer.Address" Label="Address"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="customer.City" Label="City"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="customer.State" Label="State" MaxLength="2"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField @bind-Value="customer.ZipCode" Label="Zip Code"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="customer.Notes" Label="Notes" Lines="3"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            <MudDivider Class="my-4" />
+
+            <MudStack Row="true" Spacing="2" Justify="Justify.SpaceBetween">
+                <MudButton Variant="Variant.Outlined" OnClick="@(() => Navigation.NavigateTo("/customers"))">
+                    Cancel
+                </MudButton>
+                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="@isSaving">
+                    @if (isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                        <span>Saving...</span>
+                    }
+                    else
+                    {
+                        <span>@(IsEditMode ? "Update" : "Create") Customer</span>
+                    }
+                </MudButton>
+            </MudStack>
+        </EditForm>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [Parameter] public int? CustomerId { get; set; }
+
+    private Customer customer = new();
+    private bool isSaving = false;
+    private bool IsEditMode => CustomerId.HasValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (IsEditMode)
+        {
+            var existing = await DbContext.Customers.FindAsync(CustomerId.Value);
+            if (existing == null)
+            {
+                Snackbar.Add("Customer not found", Severity.Error);
+                Navigation.NavigateTo("/customers");
+                return;
+            }
+            customer = existing;
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        isSaving = true;
+        try
+        {
+            if (IsEditMode)
+            {
+                customer.ModifiedDate = DateTime.UtcNow;
+                DbContext.Customers.Update(customer);
+            }
+            else
+            {
+                customer.CreatedDate = DateTime.UtcNow;
+                DbContext.Customers.Add(customer);
+            }
+
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add($"Customer {customer.FullName} saved successfully", Severity.Success);
+            Navigation.NavigateTo("/customers");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving customer: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}

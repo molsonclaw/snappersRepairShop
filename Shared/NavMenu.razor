@@ -1,0 +1,41 @@
+@inject NavigationManager NavigationManager
+
+<MudNavMenu>
+    <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">Home</MudNavLink>
+    
+    <AuthorizeView Roles="Admin,Office,Technician">
+        <MudNavGroup Title="Work Orders" Icon="@Icons.Material.Filled.Build" Expanded="true">
+            <MudNavLink Href="/jobs" Icon="@Icons.Material.Filled.Assignment">Work Orders</MudNavLink>
+            <MudNavLink Href="/jobs/new" Icon="@Icons.Material.Filled.Add">New Work Order</MudNavLink>
+        </MudNavGroup>
+
+        <MudNavGroup Title="Customers" Icon="@Icons.Material.Filled.People">
+            <MudNavLink Href="/customers" Icon="@Icons.Material.Filled.List">All Customers</MudNavLink>
+            <MudNavLink Href="/customers/create" Icon="@Icons.Material.Filled.PersonAdd">New Customer</MudNavLink>
+        </MudNavGroup>
+
+        <MudNavGroup Title="Vehicles" Icon="@Icons.Material.Filled.DirectionsCar">
+            <MudNavLink Href="/vehicles" Icon="@Icons.Material.Filled.List">All Vehicles</MudNavLink>
+            <MudNavLink Href="/vehicles/create" Icon="@Icons.Material.Filled.Add">New Vehicle</MudNavLink>
+        </MudNavGroup>
+    </AuthorizeView>
+
+    <AuthorizeView Roles="Admin">
+        <MudDivider Class="my-2" />
+        <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">Settings</MudNavLink>
+        <MudNavLink Href="/users" Icon="@Icons.Material.Filled.ManageAccounts">Manage Users</MudNavLink>
+    </AuthorizeView>
+
+    <MudDivider Class="my-2" />
+    
+    <AuthorizeView>
+        <Authorized>
+            <MudNavLink Href="/Identity/Account/Manage" Icon="@Icons.Material.Filled.AccountCircle">My Account</MudNavLink>
+            <MudNavLink Href="/Identity/Account/Logout" Icon="@Icons.Material.Filled.Logout">Logout</MudNavLink>
+        </Authorized>
+        <NotAuthorized>
+            <MudNavLink Href="/Identity/Account/Login" Icon="@Icons.Material.Filled.Login">Login</MudNavLink>
+        </NotAuthorized>
+    </AuthorizeView>
+</MudNavMenu>
+

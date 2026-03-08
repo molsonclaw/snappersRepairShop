@@ -1,0 +1,258 @@
+@page "/workorders"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Technician,Office")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Work Orders</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h4">
+                <MudIcon Icon="@Icons.Material.Filled.Build" Class="mr-2" />
+                Work Orders
+            </MudText>
+            <MudButton Href="/jobs/new" Variant="Variant.Filled" Color="Color.Primary" 
+                       StartIcon="@Icons.Material.Filled.Add">
+                New Work Order
+            </MudButton>
+        </MudStack>
+
+        <!-- Filters -->
+        <MudGrid Class="mb-4">
+            <MudItem xs="12" sm="6" md="3">
+                <MudTextField @bind-Value="searchText" Label="Search" 
+                              Placeholder="WO#, Customer, Vehicle..."
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                              Immediate="true" DebounceInterval="300" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudSelect T="string" @bind-Value="statusFilter" Label="Status" 
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                    <MudSelectItem T="string" Value="@("All")">All Statuses</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Not Started")">Not Started</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("In Progress")">In Progress</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Completed")">Completed</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("On Hold")">On Hold</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="dateFrom" Label="From Date" 
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="dateTo" Label="To Date" 
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+            </MudItem>
+        </MudGrid>
+
+        <!-- Work Orders Table -->
+        <MudDataGrid T="WorkOrder" Items="@FilteredWorkOrders" Dense="true" Hover="true" 
+                     Loading="@isLoading" RowsPerPage="25" Elevation="0"
+                     SortMode="SortMode.Multiple" Filterable="false" QuickFilter="@QuickFilter">
+            <Columns>
+                <PropertyColumn Property="x => x.WorkOrderNumber" Title="WO #" />
+                <PropertyColumn Property="x => x.Customer!.FullName" Title="Customer" />
+                <PropertyColumn Property="x => x.Vehicle!.Year" Title="Year" />
+                <PropertyColumn Property="x => x.Vehicle!.Make" Title="Make" />
+                <PropertyColumn Property="x => x.Vehicle!.Model" Title="Model" />
+                <TemplateColumn Title="Status">
+                    <CellTemplate>
+                        @{
+                            var color = context.Item.Status switch
+                            {
+                                "Not Started" => Color.Default,
+                                "In Progress" => Color.Info,
+                                "Completed" => Color.Success,
+                                "On Hold" => Color.Warning,
+                                _ => Color.Default
+                            };
+                        }
+                        <MudChip T="string" Size="Size.Small" Color="@color">@context.Item.Status</MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <PropertyColumn Property="x => x.DateCreated" Title="Created" Format="MM/dd/yyyy" />
+                @* Technicians never see billing fields *@
+                @if (BillingEnabled && !isTechnician)
+                {
+                    <PropertyColumn Property="x => x.GrandTotal" Title="Total" Format="C2" />
+                }
+                <TemplateColumn Title="Actions" Sortable="false">
+                    <CellTemplate>
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small" 
+                                           Color="Color.Info" OnClick="@(() => ViewWorkOrder(context.Item.WorkOrderId))"
+                                           Title="View Details" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" 
+                                           Color="Color.Primary" OnClick="@(() => EditWorkOrder(context.Item.WorkOrderId))"
+                                           Title="Edit" />
+                            <AuthorizeView Roles="Admin" Context="authContext">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" 
+                                               Color="Color.Error" OnClick="@(() => DeleteWorkOrder(context.Item))"
+                                               Title="Delete" />
+                            </AuthorizeView>
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <PagerContent>
+                <MudDataGridPager T="WorkOrder" />
+            </PagerContent>
+        </MudDataGrid>
+
+        @if (!workOrders.Any() && !isLoading)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-4">
+                No work orders found. <MudLink Href="/jobs/new">Create your first work order</MudLink>
+            </MudAlert>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [CascadingParameter(Name = "BillingEnabled")] public bool BillingEnabled { get; set; }
+
+    private List<WorkOrder> workOrders = new();
+    private bool isLoading = true;
+    private string searchText = string.Empty;
+    private string statusFilter = "All";
+    private DateTime? dateFrom;
+    private DateTime? dateTo;
+    private bool isTechnician = false;
+    private bool isAdmin = false;
+    private string? currentUserId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current user and role
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var identityUser = await UserManager.GetUserAsync(user);
+            if (identityUser != null)
+            {
+                currentUserId = identityUser.Id;
+                isTechnician = await UserManager.IsInRoleAsync(identityUser, "Technician");
+                isAdmin = await UserManager.IsInRoleAsync(identityUser, "Admin");
+            }
+        }
+
+        await LoadWorkOrders();
+    }
+
+    private async Task LoadWorkOrders()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        workOrders = await DbContext.WorkOrders
+            .Include(w => w.Customer)
+            .Include(w => w.Vehicle)
+            .OrderByDescending(w => w.DateCreated)
+            .ToListAsync();
+
+        isLoading = false;
+        StateHasChanged();
+    }
+
+    private IEnumerable<WorkOrder> FilteredWorkOrders
+    {
+        get
+        {
+            var filtered = workOrders.AsEnumerable();
+
+            // Status filter
+            if (!string.IsNullOrEmpty(statusFilter) && statusFilter != "All")
+            {
+                filtered = filtered.Where(w => w.Status == statusFilter);
+            }
+
+            // Date range filter
+            if (dateFrom.HasValue)
+            {
+                filtered = filtered.Where(w => w.DateCreated >= dateFrom.Value);
+            }
+            if (dateTo.HasValue)
+            {
+                var endOfDay = dateTo.Value.Date.AddDays(1).AddTicks(-1);
+                filtered = filtered.Where(w => w.DateCreated <= endOfDay);
+            }
+
+            return filtered;
+        }
+    }
+
+    private Func<WorkOrder, bool> QuickFilter => wo =>
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+            return true;
+
+        var search = searchText.ToLower();
+
+        if (wo.WorkOrderNumber?.ToLower().Contains(search) == true)
+            return true;
+        if (wo.Customer?.FullName?.ToLower().Contains(search) == true)
+            return true;
+        if (wo.Vehicle?.Make?.ToLower().Contains(search) == true)
+            return true;
+        if (wo.Vehicle?.Model?.ToLower().Contains(search) == true)
+            return true;
+        if (wo.Vehicle?.LicensePlate?.ToLower().Contains(search) == true)
+            return true;
+        if (wo.Description?.ToLower().Contains(search) == true)
+            return true;
+
+        return false;
+    };
+
+    private void ViewWorkOrder(int workOrderId)
+    {
+        Navigation.NavigateTo($"/workorders/{workOrderId}");
+    }
+
+    private void EditWorkOrder(int workOrderId)
+    {
+        Navigation.NavigateTo($"/jobs/edit/{workOrderId}");
+    }
+
+    private async Task DeleteWorkOrder(WorkOrder workOrder)
+    {
+        var parameters = new DialogParameters
+        {
+            { "ContentText", $"Are you sure you want to delete Work Order {workOrder.WorkOrderNumber}? This action cannot be undone." },
+            { "ButtonText", "Delete" },
+            { "Color", Color.Error }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete Work Order", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            try
+            {
+                DbContext.WorkOrders.Remove(workOrder);
+                await DbContext.SaveChangesAsync();
+
+                workOrders.Remove(workOrder);
+                Snackbar.Add($"Work Order {workOrder.WorkOrderNumber} deleted successfully", Severity.Success);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error deleting work order: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

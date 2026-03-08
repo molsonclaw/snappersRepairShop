@@ -1,0 +1,36 @@
+@{
+    Layout = null;
+}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - Snappers Repair Shop</title>
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
+    <link href="~/_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="~/css/site.css" rel="stylesheet" />
+</head>
+<body>
+    <div class="mud-layout mud-drawer-open-responsive-md-left mud-drawer-left-clipped-never">
+        <div class="mud-main-content">
+            <div class="mud-container mud-container-maxwidth-md" style="margin-top: 2rem;">
+                <div class="mud-paper mud-elevation-2" style="padding: 2rem;">
+                    <div style="text-align: center; margin-bottom: 2rem;">
+                        <h3 style="color: #594AE2; margin: 0;">Snappers Repair Shop</h3>
+                        <p style="color: #666; margin-top: 0.5rem;">Fountain City, WI</p>
+                    </div>
+                    @RenderBody()
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-validate/1.21.0/jquery.validate.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-validation-unobtrusive/4.0.0/jquery.validate.unobtrusive.min.js"></script>
+    <script src="~/_content/MudBlazor/MudBlazor.min.js"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>
+

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir F:\\\\Personal\\\\Snappers:*)",
+      "Bash(dotnet build:*)",
+      "Bash(az:*)",
+      "Bash(openssl rand:*)",
+      "Bash(/tmp/appsettings.json:*)",
+      "Bash(dotnet publish:*)",
+      "Bash(curl:*)",
+      "Bash(rm:*)",
+      "Bash(az webapp:*)"
+    ]
+  }
+}

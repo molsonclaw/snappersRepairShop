@@ -1,0 +1,386 @@
+@page "/workorders/{WorkOrderId:int}"
+@page "/workorders/details/{WorkOrderId:int}"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin,Technician,Office")]
+@inject ApplicationDbContext DbContext
+@inject BlobStorageService BlobService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Work Order Details</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    @if (workOrder == null)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else
+    {
+        <MudPaper Elevation="2" Class="pa-4">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+                <MudText Typo="Typo.h4">
+                    <MudIcon Icon="@Icons.Material.Filled.Build" Class="mr-2" />
+                    @workOrder.WorkOrderNumber
+                </MudText>
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Href="/workorders" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack">
+                        Back to List
+                    </MudButton>
+                    <MudButton Href="@($"/jobs/edit/{WorkOrderId}")" Variant="Variant.Filled" 
+                               Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit">
+                        Edit
+                    </MudButton>
+                </MudStack>
+            </MudStack>
+
+            <!-- Status Badge -->
+            <MudChip T="string" Color="@GetStatusColor(workOrder.Status)" Size="Size.Large" Class="mb-4">
+                @workOrder.Status
+            </MudChip>
+
+            <!-- Customer & Vehicle Info -->
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudCard Elevation="0" Outlined="true">
+                        <MudCardHeader>
+                            <CardHeaderContent>
+                                <MudText Typo="Typo.h6">
+                                    <MudIcon Icon="@Icons.Material.Filled.Person" Class="mr-2" />
+                                    Customer
+                                </MudText>
+                            </CardHeaderContent>
+                        </MudCardHeader>
+                        <MudCardContent>
+                            <MudText><strong>Name:</strong> @workOrder.Customer?.FullName</MudText>
+                            <MudText><strong>Phone:</strong> @workOrder.Customer?.Phone</MudText>
+                            @if (!string.IsNullOrEmpty(workOrder.Customer?.Email))
+                            {
+                                <MudText><strong>Email:</strong> @workOrder.Customer?.Email</MudText>
+                            }
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudCard Elevation="0" Outlined="true">
+                        <MudCardHeader>
+                            <CardHeaderContent>
+                                <MudText Typo="Typo.h6">
+                                    <MudIcon Icon="@Icons.Material.Filled.DirectionsCar" Class="mr-2" />
+                                    Vehicle
+                                </MudText>
+                            </CardHeaderContent>
+                        </MudCardHeader>
+                        <MudCardContent>
+                            <MudText><strong>Vehicle:</strong> @workOrder.Vehicle?.Year @workOrder.Vehicle?.Make @workOrder.Vehicle?.Model</MudText>
+                            <MudText><strong>VIN:</strong> @workOrder.Vehicle?.VIN</MudText>
+                            <MudText><strong>License:</strong> @workOrder.Vehicle?.LicensePlate</MudText>
+                            @if (workOrder.CurrentMileage.HasValue)
+                            {
+                                <MudText><strong>Mileage:</strong> @workOrder.CurrentMileage.Value.ToString("N0")</MudText>
+                            }
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <!-- Work Description -->
+                <MudItem xs="12">
+                    <MudCard Elevation="0" Outlined="true">
+                        <MudCardHeader>
+                            <CardHeaderContent>
+                                <MudText Typo="Typo.h6">Work Description</MudText>
+                            </CardHeaderContent>
+                        </MudCardHeader>
+                        <MudCardContent>
+                            <MudText>@workOrder.Description</MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <!-- Dates & Technician -->
+                <MudItem xs="12" md="6">
+                    <MudCard Elevation="0" Outlined="true">
+                        <MudCardHeader>
+                            <CardHeaderContent>
+                                <MudText Typo="Typo.h6">Timeline</MudText>
+                            </CardHeaderContent>
+                        </MudCardHeader>
+                        <MudCardContent>
+                            <MudText><strong>Created:</strong> @workOrder.DateCreated.ToString("MM/dd/yyyy hh:mm tt")</MudText>
+                            @if (workOrder.DateStarted.HasValue)
+                            {
+                                <MudText><strong>Started:</strong> @workOrder.DateStarted.Value.ToString("MM/dd/yyyy hh:mm tt")</MudText>
+                            }
+                            @if (workOrder.DateCompleted.HasValue)
+                            {
+                                <MudText><strong>Completed:</strong> @workOrder.DateCompleted.Value.ToString("MM/dd/yyyy hh:mm tt")</MudText>
+                            }
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudCard Elevation="0" Outlined="true">
+                        <MudCardHeader>
+                            <CardHeaderContent>
+                                <MudText Typo="Typo.h6">Assigned Technician</MudText>
+                            </CardHeaderContent>
+                        </MudCardHeader>
+                        <MudCardContent>
+                            <MudText>@(workOrder.AssignedTechnicianId ?? "Unassigned")</MudText>
+                        </MudCardContent>
+                    </MudCard>
+                </MudItem>
+
+                <!-- Labor Lines -->
+                @if (workOrder.LaborLines.Any())
+                {
+                    <MudItem xs="12">
+                        <MudCard Elevation="0" Outlined="true">
+                            <MudCardHeader>
+                                <CardHeaderContent>
+                                    <MudText Typo="Typo.h6">
+                                        <MudIcon Icon="@Icons.Material.Filled.Engineering" Class="mr-2" />
+                                        Labor
+                                    </MudText>
+                                </CardHeaderContent>
+                            </MudCardHeader>
+                            <MudCardContent>
+                                <MudSimpleTable Dense="true" Hover="true">
+                                    <thead>
+                                        <tr>
+                                            <th>Description</th>
+                                            <th>Hours</th>
+                                            @* Technicians never see billing fields *@
+                                            @if (BillingEnabled && !isTechnician)
+                                            {
+                                                <th>Rate</th>
+                                                <th>Total</th>
+                                            }
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var labor in workOrder.LaborLines)
+                                        {
+                                            <tr>
+                                                <td>@labor.Description</td>
+                                                <td>@labor.Hours</td>
+                                                @* Technicians never see billing fields *@
+                                                @if (BillingEnabled && !isTechnician)
+                                                {
+                                                    <td>@labor.RatePerHour.ToString("C2")</td>
+                                                    <td>@labor.Total.ToString("C2")</td>
+                                                }
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                }
+
+                <!-- Parts Used -->
+                @if (workOrder.PartsUsed.Any())
+                {
+                    <MudItem xs="12">
+                        <MudCard Elevation="0" Outlined="true">
+                            <MudCardHeader>
+                                <CardHeaderContent>
+                                    <MudText Typo="Typo.h6">
+                                        <MudIcon Icon="@Icons.Material.Filled.Settings" Class="mr-2" />
+                                        Parts
+                                    </MudText>
+                                </CardHeaderContent>
+                            </MudCardHeader>
+                            <MudCardContent>
+                                <MudSimpleTable Dense="true" Hover="true">
+                                    <thead>
+                                        <tr>
+                                            <th>Part #</th>
+                                            <th>Description</th>
+                                            <th>Qty</th>
+                                            @* Technicians never see billing fields *@
+                                            @if (BillingEnabled && !isTechnician)
+                                            {
+                                                <th>Unit Price</th>
+                                                <th>Total</th>
+                                            }
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var part in workOrder.PartsUsed)
+                                        {
+                                            <tr>
+                                                <td>@part.PartNumber</td>
+                                                <td>@part.Description</td>
+                                                <td>@part.Quantity</td>
+                                                @* Technicians never see billing fields *@
+                                                @if (BillingEnabled && !isTechnician)
+                                                {
+                                                    <td>@part.UnitCost.ToString("C2")</td>
+                                                    <td>@part.Total.ToString("C2")</td>
+                                                }
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                }
+
+                <!-- Totals (if billing enabled and not technician) -->
+                @* Technicians never see billing fields *@
+                @if (BillingEnabled && !isTechnician)
+                {
+                    <MudItem xs="12" md="6" Class="ml-auto">
+                        <MudCard Elevation="0" Outlined="true">
+                            <MudCardContent>
+                                <MudStack Spacing="2">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText><strong>Labor Total:</strong></MudText>
+                                        <MudText>@workOrder.LaborTotal.ToString("C2")</MudText>
+                                    </MudStack>
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText><strong>Parts Total:</strong></MudText>
+                                        <MudText>@workOrder.PartsTotal.ToString("C2")</MudText>
+                                    </MudStack>
+                                    <MudDivider />
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText><strong>Subtotal:</strong></MudText>
+                                        <MudText>@((workOrder.LaborTotal + workOrder.PartsTotal).ToString("C2"))</MudText>
+                                    </MudStack>
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText><strong>Tax:</strong></MudText>
+                                        <MudText>@workOrder.TaxAmount.ToString("C2")</MudText>
+                                    </MudStack>
+                                    <MudDivider />
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                        <MudText Typo="Typo.h6"><strong>Grand Total:</strong></MudText>
+                                        <MudText Typo="Typo.h6"><strong>@workOrder.GrandTotal.ToString("C2")</strong></MudText>
+                                    </MudStack>
+                                </MudStack>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                }
+
+                <!-- Photos -->
+                @if (photoUrls.Any())
+                {
+                    <MudItem xs="12">
+                        <MudCard Elevation="0" Outlined="true">
+                            <MudCardHeader>
+                                <CardHeaderContent>
+                                    <MudText Typo="Typo.h6">
+                                        <MudIcon Icon="@Icons.Material.Filled.PhotoCamera" Class="mr-2" />
+                                        Photos (@photoUrls.Count)
+                                    </MudText>
+                                </CardHeaderContent>
+                            </MudCardHeader>
+                            <MudCardContent>
+                                <MudGrid>
+                                    @foreach (var (photo, originalUrl, thumbnailUrl) in photoUrls)
+                                    {
+                                        <MudItem xs="12" sm="6" md="4">
+                                            <MudCard>
+                                                <MudCardMedia Image="@thumbnailUrl" Height="200" />
+                                                <MudCardContent>
+                                                    <MudText Typo="Typo.body2">@photo.Caption</MudText>
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                        @photo.UploadedDate.ToString("MM/dd/yyyy")
+                                                    </MudText>
+                                                </MudCardContent>
+                                                <MudCardActions>
+                                                    <MudButton Href="@originalUrl" Target="_blank" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.OpenInNew">
+                                                        View Full Size
+                                                    </MudButton>
+                                                </MudCardActions>
+                                            </MudCard>
+                                        </MudItem>
+                                    }
+                                </MudGrid>
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                }
+            </MudGrid>
+        </MudPaper>
+    }
+</MudContainer>
+
+@code {
+    [Parameter] public int WorkOrderId { get; set; }
+    [CascadingParameter(Name = "BillingEnabled")] public bool BillingEnabled { get; set; }
+
+    private WorkOrder? workOrder;
+    private List<(JobPhoto photo, string originalUrl, string thumbnailUrl)> photoUrls = new();
+    private bool isTechnician = false;
+    private bool isAdmin = false;
+    private string? currentUserId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current user and role
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var identityUser = await UserManager.GetUserAsync(user);
+            if (identityUser != null)
+            {
+                currentUserId = identityUser.Id;
+                isTechnician = await UserManager.IsInRoleAsync(identityUser, "Technician");
+                isAdmin = await UserManager.IsInRoleAsync(identityUser, "Admin");
+            }
+        }
+
+        await LoadWorkOrder();
+    }
+
+    private async Task LoadWorkOrder()
+    {
+        workOrder = await DbContext.WorkOrders
+            .Include(w => w.Customer)
+            .Include(w => w.Vehicle)
+            .Include(w => w.LaborLines)
+            .Include(w => w.PartsUsed)
+            .Include(w => w.JobPhotos)
+            .FirstOrDefaultAsync(w => w.WorkOrderId == WorkOrderId);
+
+        if (workOrder == null)
+        {
+            Snackbar.Add("Work order not found", Severity.Error);
+            Navigation.NavigateTo("/workorders");
+            return;
+        }
+
+        // Load photo URLs
+        if (workOrder.JobPhotos.Any())
+        {
+            photoUrls = await BlobService.GetWorkOrderPhotosWithUrlsAsync(
+                WorkOrderId,
+                TimeSpan.FromHours(2)
+            );
+        }
+    }
+
+    private Color GetStatusColor(string status)
+    {
+        return status switch
+        {
+            "Not Started" => Color.Default,
+            "In Progress" => Color.Info,
+            "Completed" => Color.Success,
+            "On Hold" => Color.Warning,
+            _ => Color.Default
+        };
+    }
+}

@@ -1,0 +1,279 @@
+@page "/settings"
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin")]
+@inject ApplicationDbContext DbContext
+@inject SettingsService SettingsService
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>Settings - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    <MudText Typo="Typo.h4" Class="mb-4">
+        <MudIcon Icon="@Icons.Material.Filled.Settings" Class="mr-2" />
+        Application Settings
+    </MudText>
+
+    @if (_settings == null)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-4">Billing Configuration</MudText>
+            
+            <MudSwitch 
+                @bind-Value="_settings.BillingEnabled" 
+                Color="Color.Primary" 
+                Label="Enable Billing Features"
+                T="bool"
+                CheckedChanged="OnBillingEnabledChanged">
+                <MudText Typo="Typo.body2" Class="ml-8 mt-2" Color="Color.Secondary">
+                    @if (_settings.BillingEnabled)
+                    {
+                        <text>✓ Billing features are enabled. Price columns are visible throughout the application.</text>
+                    }
+                    else
+                    {
+                        <text>✗ Billing features are disabled. All price/cost fields are hidden.</text>
+                    }
+                </MudText>
+            </MudSwitch>
+
+            @if (_isBackfilling)
+            {
+                <MudAlert Severity="Severity.Info" Class="mt-4">
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-2" />
+                    Calculating totals for existing work orders...
+                </MudAlert>
+            }
+
+            @if (_backfillResult != null)
+            {
+                <MudAlert Severity="Severity.Success" Class="mt-4" CloseIcon="@Icons.Material.Filled.Close" CloseIconClicked="() => _backfillResult = null">
+                    <MudText Typo="Typo.body1">
+                        <strong>Backfill Complete!</strong>
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        Updated @_backfillResult totals on existing work orders.
+                    </MudText>
+                </MudAlert>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-4">Shop Information</MudText>
+            
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudTextField 
+                        @bind-Value="_settings.ShopName" 
+                        Label="Shop Name" 
+                        Variant="Variant.Outlined" 
+                        Required="true" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField 
+                        @bind-Value="_settings.ShopAddress" 
+                        Label="Address" 
+                        Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField 
+                        @bind-Value="_settings.ShopPhone" 
+                        Label="Phone" 
+                        Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField 
+                        @bind-Value="_settings.ShopEmail" 
+                        Label="Email" 
+                        Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        @if (_settings.BillingEnabled)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-4">Billing Defaults</MudText>
+                
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudNumericField 
+                            @bind-Value="_settings.DefaultLaborRate" 
+                            Label="Default Labor Rate ($/hour)" 
+                            Variant="Variant.Outlined"
+                            Format="C2"
+                            Min="0" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudNumericField 
+                            @bind-Value="_settings.TaxRate" 
+                            Label="Tax Rate (%)" 
+                            Variant="Variant.Outlined"
+                            Format="P2"
+                            Min="0"
+                            Max="1" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        }
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-4">Notes</MudText>
+            <MudTextField 
+                @bind-Value="_settings.Notes" 
+                Label="Internal Notes" 
+                Variant="Variant.Outlined"
+                Lines="4" />
+        </MudPaper>
+
+        <MudButton 
+            Variant="Variant.Filled" 
+            Color="Color.Primary" 
+            OnClick="SaveSettings"
+            Disabled="_isSaving"
+            StartIcon="@Icons.Material.Filled.Save"
+            Class="mr-2">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <text>Saving...</text>
+            }
+            else
+            {
+                <text>Save Settings</text>
+            }
+        </MudButton>
+
+        <MudButton
+            Variant="Variant.Outlined"
+            Color="Color.Secondary"
+            OnClick="LoadSettings"
+            StartIcon="@Icons.Material.Filled.Refresh">
+            Reset
+        </MudButton>
+    }
+</MudContainer>
+
+@code {
+    private AppSettings? _settings;
+    private bool _isSaving;
+    private bool _isBackfilling;
+    private int? _backfillResult;
+    private bool _previousBillingEnabled;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSettings();
+    }
+
+    private async Task LoadSettings()
+    {
+        _settings = await SettingsService.GetSettingsAsync();
+        _previousBillingEnabled = _settings.BillingEnabled;
+        StateHasChanged();
+    }
+
+    private async Task OnBillingEnabledChanged(bool newValue)
+    {
+        // If billing is being enabled, backfill totals on existing work orders
+        if (newValue && !_previousBillingEnabled)
+        {
+            _isBackfilling = true;
+            StateHasChanged();
+
+            try
+            {
+                var updatedCount = await BackfillWorkOrderTotals();
+                _backfillResult = updatedCount;
+                Snackbar.Add($"Billing enabled! Updated {updatedCount} work orders.", Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error backfilling totals: {ex.Message}", Severity.Error);
+            }
+            finally
+            {
+                _isBackfilling = false;
+                StateHasChanged();
+            }
+        }
+        else if (!newValue && _previousBillingEnabled)
+        {
+            Snackbar.Add("Billing disabled. Price columns will be hidden.", Severity.Info);
+        }
+
+        _previousBillingEnabled = newValue;
+    }
+
+    private async Task<int> BackfillWorkOrderTotals()
+    {
+        // Get all work orders with their labor lines and parts
+        var workOrders = await DbContext.WorkOrders
+            .Include(w => w.LaborLines)
+            .Include(w => w.PartsUsed)
+            .ToListAsync();
+
+        int updatedCount = 0;
+
+        foreach (var workOrder in workOrders)
+        {
+            // Calculate LaborTotal from labor lines
+            var laborTotal = workOrder.LaborLines?.Sum(l => l.Hours * l.RatePerHour) ?? 0;
+
+            // Calculate PartsTotal from parts used
+            var partsTotal = workOrder.PartsUsed?.Sum(p => p.Quantity * p.UnitCost) ?? 0;
+
+            // Only update if values have changed
+            if (workOrder.LaborTotal != laborTotal || workOrder.PartsTotal != partsTotal)
+            {
+                workOrder.LaborTotal = laborTotal;
+                workOrder.PartsTotal = partsTotal;
+                updatedCount++;
+            }
+        }
+
+        if (updatedCount > 0)
+        {
+            await DbContext.SaveChangesAsync();
+        }
+
+        return updatedCount;
+    }
+
+    private async Task SaveSettings()
+    {
+        if (_settings == null) return;
+
+        _isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            // Get current user ID
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var user = await UserManager.GetUserAsync(authState.User);
+            _settings.LastModifiedByUserId = user?.Id;
+
+            // Update settings via service (this will trigger OnSettingsChanged event)
+            await SettingsService.UpdateSettingsAsync(_settings);
+
+            Snackbar.Add("Settings saved successfully!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving settings: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+}
+

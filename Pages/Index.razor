@@ -1,0 +1,246 @@
+@page "/"
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Identity
+@attribute [Authorize(Roles = "Admin,Technician,Office")]
+@inject ApplicationDbContext DbContext
+@inject NavigationManager Navigation
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Dashboard - Snappers Repair Shop</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+            <!-- Header with Quick Action -->
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+                <div>
+                    <MudText Typo="Typo.h4" GutterBottom="true">
+                        <MudIcon Icon="@Icons.Material.Filled.Dashboard" Class="mr-2" />
+                        Dashboard
+                    </MudText>
+                    <MudText Typo="Typo.body1" Color="Color.Secondary">
+                        Welcome to Snappers Repair Shop
+                    </MudText>
+                </div>
+                <MudButton Href="/jobs/new" Variant="Variant.Filled" Color="Color.Primary"
+                           Size="Size.Large" StartIcon="@Icons.Material.Filled.Add">
+                    New Work Order
+                </MudButton>
+            </MudStack>
+
+            <!-- Status Cards -->
+            <MudGrid Class="mb-6">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudCard Elevation="2" Class="pa-4">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <div>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Total Jobs</MudText>
+                                <MudText Typo="Typo.h4">@totalJobs</MudText>
+                            </div>
+                            <MudIcon Icon="@Icons.Material.Filled.Assignment" Size="Size.Large" Color="Color.Primary" />
+                        </MudStack>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" sm="6" md="3">
+                    <MudCard Elevation="2" Class="pa-4">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <div>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">In Progress</MudText>
+                                <MudText Typo="Typo.h4" Color="Color.Info">@inProgressJobs</MudText>
+                            </div>
+                            <MudIcon Icon="@Icons.Material.Filled.Build" Size="Size.Large" Color="Color.Info" />
+                        </MudStack>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" sm="6" md="3">
+                    <MudCard Elevation="2" Class="pa-4">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <div>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Completed</MudText>
+                                <MudText Typo="Typo.h4" Color="Color.Success">@completedJobs</MudText>
+                            </div>
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" Color="Color.Success" />
+                        </MudStack>
+                    </MudCard>
+                </MudItem>
+
+                <MudItem xs="12" sm="6" md="3">
+                    <MudCard Elevation="2" Class="pa-4">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <div>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Not Started</MudText>
+                                <MudText Typo="Typo.h4" Color="Color.Default">@notStartedJobs</MudText>
+                            </div>
+                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Large" Color="Color.Default" />
+                        </MudStack>
+                    </MudCard>
+                </MudItem>
+            </MudGrid>
+
+            <!-- Recent Work Orders -->
+            <MudPaper Elevation="2" Class="pa-4">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+                    <MudText Typo="Typo.h5">
+                        <MudIcon Icon="@Icons.Material.Filled.History" Class="mr-2" />
+                        Recent Work Orders
+                    </MudText>
+                    <MudButton Href="/jobs" Variant="Variant.Text" Color="Color.Primary"
+                               EndIcon="@Icons.Material.Filled.ArrowForward">
+                        View All Jobs
+                    </MudButton>
+                </MudStack>
+
+                @if (isLoading)
+                {
+                    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+                }
+                else if (!recentWorkOrders.Any())
+                {
+                    <MudAlert Severity="Severity.Info">No work orders found. Click "New Work Order" to get started!</MudAlert>
+                }
+                else
+                {
+                    <MudTable T="WorkOrder" Items="@recentWorkOrders" Hover="true" Dense="true"
+                              Elevation="0" OnRowClick="OnRowClick">
+                        <HeaderContent>
+                            <MudTh>WO #</MudTh>
+                            <MudTh>Customer</MudTh>
+                            <MudTh>Vehicle</MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Created</MudTh>
+                            @* Technicians never see billing fields *@
+                            @if (BillingEnabled && !isTechnician)
+                            {
+                                <MudTh Style="text-align: right">Total</MudTh>
+                            }
+                        </HeaderContent>
+                        <RowTemplate Context="rowContext">
+                            <MudTd DataLabel="WO #">
+                                <MudLink Href="@($"/workorders/details/{rowContext.WorkOrderId}")" Color="Color.Primary">
+                                    @rowContext.WorkOrderNumber
+                                </MudLink>
+                            </MudTd>
+                            <MudTd DataLabel="Customer">@rowContext.Customer?.FullName</MudTd>
+                            <MudTd DataLabel="Vehicle">@rowContext.Vehicle?.Year @rowContext.Vehicle?.Make @rowContext.Vehicle?.Model</MudTd>
+                            <MudTd DataLabel="Status">
+                                <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(rowContext.Status)">
+                                    @rowContext.Status
+                                </MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="Created">@rowContext.DateCreated.ToString("MM/dd/yyyy")</MudTd>
+                            @* Technicians never see billing fields *@
+                            @if (BillingEnabled && !isTechnician)
+                            {
+                                <MudTd DataLabel="Total" Style="text-align: right">@rowContext.GrandTotal.ToString("C2")</MudTd>
+                            }
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudContainer>
+    </Authorized>
+    <NotAuthorized>
+        <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-8">
+            <MudAlert Severity="Severity.Info">
+                Please <MudLink Href="/Identity/Account/Login">login</MudLink> to access the system.
+            </MudAlert>
+        </MudContainer>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    [CascadingParameter(Name = "BillingEnabled")] public bool BillingEnabled { get; set; }
+
+    private List<WorkOrder> recentWorkOrders = new();
+    private bool isLoading = true;
+    private int totalJobs = 0;
+    private int inProgressJobs = 0;
+    private int completedJobs = 0;
+    private int notStartedJobs = 0;
+    private bool isTechnician = false;
+    private bool isAdmin = false;
+    private string? currentUserId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current user and role
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var identityUser = await UserManager.GetUserAsync(user);
+            if (identityUser != null)
+            {
+                currentUserId = identityUser.Id;
+                isTechnician = await UserManager.IsInRoleAsync(identityUser, "Technician");
+                isAdmin = await UserManager.IsInRoleAsync(identityUser, "Admin");
+            }
+        }
+
+        await LoadDashboardData();
+    }
+
+    private async Task LoadDashboardData()
+    {
+        isLoading = true;
+
+        // Build query with role-based filtering
+        var query = DbContext.WorkOrders
+            .Include(w => w.Customer)
+            .Include(w => w.Vehicle)
+            .AsQueryable();
+
+        // Technicians only see their own work orders
+        if (isTechnician && !isAdmin && !string.IsNullOrEmpty(currentUserId))
+        {
+            query = query.Where(w => w.AssignedTechnicianId == currentUserId);
+        }
+
+        // Load recent work orders (last 10)
+        recentWorkOrders = await query
+            .OrderByDescending(w => w.DateCreated)
+            .Take(10)
+            .ToListAsync();
+
+        // Calculate statistics with same filtering
+        if (isTechnician && !isAdmin && !string.IsNullOrEmpty(currentUserId))
+        {
+            totalJobs = await DbContext.WorkOrders.CountAsync(w => w.AssignedTechnicianId == currentUserId);
+            inProgressJobs = await DbContext.WorkOrders.CountAsync(w => w.AssignedTechnicianId == currentUserId && w.Status == "In Progress");
+            completedJobs = await DbContext.WorkOrders.CountAsync(w => w.AssignedTechnicianId == currentUserId && w.Status == "Completed");
+            notStartedJobs = await DbContext.WorkOrders.CountAsync(w => w.AssignedTechnicianId == currentUserId && w.Status == "Not Started");
+        }
+        else
+        {
+            totalJobs = await DbContext.WorkOrders.CountAsync();
+            inProgressJobs = await DbContext.WorkOrders.CountAsync(w => w.Status == "In Progress");
+            completedJobs = await DbContext.WorkOrders.CountAsync(w => w.Status == "Completed");
+            notStartedJobs = await DbContext.WorkOrders.CountAsync(w => w.Status == "Not Started");
+        }
+
+        isLoading = false;
+    }
+
+    private Color GetStatusColor(string status)
+    {
+        return status switch
+        {
+            "Not Started" => Color.Default,
+            "In Progress" => Color.Info,
+            "Completed" => Color.Success,
+            "On Hold" => Color.Warning,
+            _ => Color.Default
+        };
+    }
+
+    private void OnRowClick(TableRowClickEventArgs<WorkOrder> args)
+    {
+        Navigation.NavigateTo($"/workorders/details/{args.Item.WorkOrderId}");
+    }
+
+}
+

@@ -1,0 +1,288 @@
+@page "/jobs"
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Identity
+@attribute [Authorize(Roles = "Admin,Technician,Office")]
+@inject ApplicationDbContext DbContext
+@inject UserManager<IdentityUser> UserManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+
+<PageTitle>Work Orders - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <!-- Header -->
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h4">
+                <MudIcon Icon="@Icons.Material.Filled.Assignment" Class="mr-2" />
+                Work Orders
+            </MudText>
+            <MudButton Href="/jobs/new" Variant="Variant.Filled" Color="Color.Primary" 
+                       StartIcon="@Icons.Material.Filled.Add">
+                New Work Order
+            </MudButton>
+        </MudStack>
+
+        <!-- Filters -->
+        <MudGrid Class="mb-4">
+            <MudItem xs="12" md="4">
+                <MudTextField @bind-Value="searchText" Label="Search" 
+                              Placeholder="Search by WO#, customer, vehicle..."
+                              Variant="Variant.Outlined" Immediate="true"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="2">
+                <MudSelect T="string" @bind-Value="statusFilter" Label="Status" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value="@("All")">All</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Not Started")">Not Started</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("In Progress")">In Progress</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Completed")">Completed</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("On Hold")">On Hold</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudSelect T="string" @bind-Value="technicianFilter" Label="Technician" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value="@("All")">All</MudSelectItem>
+                    @foreach (var tech in technicians)
+                    {
+                        <MudSelectItem T="string" Value="@tech.Id">@tech.Email</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" 
+                               OnClick="ApplyFilters" FullWidth="true">
+                        Apply Filters
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" OnClick="ClearFilters" FullWidth="true">
+                        Clear
+                    </MudButton>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+
+        <!-- Date Range Filter -->
+        <MudGrid Class="mb-4">
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="dateFrom" Label="Date From" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="dateTo" Label="Date To" Variant="Variant.Outlined" />
+            </MudItem>
+        </MudGrid>
+
+        <!-- Work Orders DataGrid -->
+        <MudDataGrid T="WorkOrder" Items="@FilteredWorkOrders" Dense="true" Hover="true" 
+                     Loading="@isLoading" RowsPerPage="25" Elevation="0"
+                     SortMode="SortMode.Multiple" Filterable="false" 
+                     QuickFilter="@QuickFilter" RowClick="OnRowClick">
+            <Columns>
+                <PropertyColumn Property="x => x.WorkOrderNumber" Title="WO #" />
+                <PropertyColumn Property="x => x.Customer!.FullName" Title="Customer" />
+                <TemplateColumn Title="Vehicle">
+                    <CellTemplate>
+                        @context.Item.Vehicle?.Year @context.Item.Vehicle?.Make @context.Item.Vehicle?.Model
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Status" Sortable="true">
+                    <CellTemplate>
+                        <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.Item.Status)">
+                            @context.Item.Status
+                        </MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <PropertyColumn Property="x => x.DateCreated" Title="Created" Format="MM/dd/yyyy" />
+                <PropertyColumn Property="x => x.DateCompleted" Title="Completed" Format="MM/dd/yyyy" />
+                @* Technicians never see billing fields *@
+                @if (BillingEnabled && !isTechnician)
+                {
+                    <PropertyColumn Property="x => x.GrandTotal" Title="Total" Format="C2" />
+                }
+                <TemplateColumn Title="Actions" Sortable="false">
+                    <CellTemplate>
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility" 
+                                           Size="Size.Small" Color="Color.Primary"
+                                           Href="@($"/workorders/details/{context.Item.WorkOrderId}")" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" 
+                                           Size="Size.Small" Color="Color.Info"
+                                           Href="@($"/jobs/edit/{context.Item.WorkOrderId}")" />
+                        </MudStack>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <PagerContent>
+                <MudDataGridPager T="WorkOrder" />
+            </PagerContent>
+        </MudDataGrid>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    [CascadingParameter(Name = "BillingEnabled")] public bool BillingEnabled { get; set; }
+
+    private List<WorkOrder> workOrders = new();
+    private List<IdentityUser> technicians = new();
+    private bool isLoading = true;
+    private string searchText = string.Empty;
+    private string statusFilter = "All";
+    private string technicianFilter = "All";
+    private DateTime? dateFrom;
+    private DateTime? dateTo;
+    private bool isTechnician = false;
+    private bool isAdmin = false;
+    private string? currentUserId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current user and role
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            var identityUser = await UserManager.GetUserAsync(user);
+            if (identityUser != null)
+            {
+                currentUserId = identityUser.Id;
+                isTechnician = await UserManager.IsInRoleAsync(identityUser, "Technician");
+                isAdmin = await UserManager.IsInRoleAsync(identityUser, "Admin");
+            }
+        }
+
+        await LoadTechnicians();
+        await LoadWorkOrders();
+    }
+
+    private async Task LoadTechnicians()
+    {
+        var techRole = await DbContext.Roles.FirstOrDefaultAsync(r => r.Name == "Technician");
+        if (techRole != null)
+        {
+            var techUserIds = await DbContext.UserRoles
+                .Where(ur => ur.RoleId == techRole.Id)
+                .Select(ur => ur.UserId)
+                .ToListAsync();
+
+            technicians = await DbContext.Users
+                .Where(u => techUserIds.Contains(u.Id))
+                .ToListAsync();
+        }
+    }
+
+    private async Task LoadWorkOrders()
+    {
+        isLoading = true;
+
+        // Build query with role-based filtering
+        var query = DbContext.WorkOrders
+            .Include(w => w.Customer)
+            .Include(w => w.Vehicle)
+            .AsQueryable();
+
+        // Technicians only see their own work orders
+        if (isTechnician && !isAdmin && !string.IsNullOrEmpty(currentUserId))
+        {
+            query = query.Where(w => w.AssignedTechnicianId == currentUserId);
+        }
+
+        workOrders = await query
+            .OrderByDescending(w => w.DateCreated)
+            .ToListAsync();
+
+        isLoading = false;
+    }
+
+    private IEnumerable<WorkOrder> FilteredWorkOrders
+    {
+        get
+        {
+            var filtered = workOrders.AsEnumerable();
+
+            // Status filter
+            if (statusFilter != "All")
+            {
+                filtered = filtered.Where(w => w.Status == statusFilter);
+            }
+
+            // Technician filter
+            if (technicianFilter != "All")
+            {
+                filtered = filtered.Where(w => w.AssignedTechnicianId == technicianFilter);
+            }
+
+            // Date range filter
+            if (dateFrom.HasValue)
+            {
+                filtered = filtered.Where(w => w.DateCreated.Date >= dateFrom.Value.Date);
+            }
+
+            if (dateTo.HasValue)
+            {
+                filtered = filtered.Where(w => w.DateCreated.Date <= dateTo.Value.Date);
+            }
+
+            // Search text filter
+            if (!string.IsNullOrWhiteSpace(searchText))
+            {
+                var search = searchText.ToLower();
+                filtered = filtered.Where(w =>
+                    w.WorkOrderNumber.ToLower().Contains(search) ||
+                    (w.Customer?.FullName?.ToLower().Contains(search) ?? false) ||
+                    (w.Vehicle?.Make?.ToLower().Contains(search) ?? false) ||
+                    (w.Vehicle?.Model?.ToLower().Contains(search) ?? false) ||
+                    (w.Vehicle?.LicensePlate?.ToLower().Contains(search) ?? false)
+                );
+            }
+
+            return filtered;
+        }
+    }
+
+    private Func<WorkOrder, bool> QuickFilter => x =>
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+            return true;
+
+        var search = searchText.ToLower();
+        return x.WorkOrderNumber.ToLower().Contains(search) ||
+               (x.Customer?.FullName?.ToLower().Contains(search) ?? false) ||
+               (x.Vehicle?.Make?.ToLower().Contains(search) ?? false) ||
+               (x.Vehicle?.Model?.ToLower().Contains(search) ?? false);
+    };
+
+    private Color GetStatusColor(string status)
+    {
+        return status switch
+        {
+            "Not Started" => Color.Default,
+            "In Progress" => Color.Info,
+            "Completed" => Color.Success,
+            "On Hold" => Color.Warning,
+            _ => Color.Default
+        };
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<WorkOrder> args)
+    {
+        Navigation.NavigateTo($"/workorders/details/{args.Item.WorkOrderId}");
+    }
+
+    private async Task ApplyFilters()
+    {
+        await LoadWorkOrders();
+    }
+
+    private async Task ClearFilters()
+    {
+        searchText = string.Empty;
+        statusFilter = "All";
+        technicianFilter = "All";
+        dateFrom = null;
+        dateTo = null;
+        await LoadWorkOrders();
+    }
+
+}

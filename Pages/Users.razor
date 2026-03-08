@@ -1,0 +1,216 @@
+@page "/users"
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize(Roles = "Admin")]
+@inject UserManager<IdentityUser> UserManager
+@inject RoleManager<IdentityRole> RoleManager
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Manage Users - Snappers Repair Shop</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudText Typo="Typo.h4">
+                <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Class="mr-2" />
+                Manage Users
+            </MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.PersonAdd"
+                       OnClick="@(() => showAddUser = true)">
+                Add User
+            </MudButton>
+        </MudStack>
+
+        @if (isLoading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else
+        {
+            <MudTable T="UserWithRole" Items="@users" Dense="true" Hover="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Email</MudTh>
+                    <MudTh>Role</MudTh>
+                    <MudTh>Email Confirmed</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="row">
+                    <MudTd DataLabel="Email">@row.Email</MudTd>
+                    <MudTd DataLabel="Role">
+                        <MudChip T="string" Size="Size.Small" Color="@GetRoleColor(row.Role)">@row.Role</MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Email Confirmed">
+                        @if (row.EmailConfirmed)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success" />
+                        }
+                        else
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Cancel" Size="Size.Small" Color="Color.Error" />
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => DeleteUser(row))"
+                                           Disabled="@(row.Email == "admin@snappersrepair.com")" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudPaper>
+</MudContainer>
+
+@if (showAddUser)
+{
+    <MudDialog @bind-Visible="showAddUser" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true })">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Add New User</MudText>
+        </TitleContent>
+        <DialogContent>
+            <MudStack Spacing="3">
+                <MudTextField @bind-Value="newUserEmail" Label="Email" Required="true" Variant="Variant.Outlined"
+                              InputType="InputType.Email" />
+                <MudTextField @bind-Value="newUserPassword" Label="Password" Required="true" Variant="Variant.Outlined"
+                              InputType="InputType.Password" HelperText="Min 8 chars, uppercase, lowercase, digit" />
+                <MudSelect T="string" @bind-Value="newUserRole" Label="Role" Required="true" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value="@("Admin")">Admin</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Technician")">Technician</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("Office")">Office</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="@(() => showAddUser = false)">Cancel</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddUser">Create User</MudButton>
+        </DialogActions>
+    </MudDialog>
+}
+
+@code {
+    private List<UserWithRole> users = new();
+    private bool isLoading = true;
+
+    private bool showAddUser = false;
+    private string newUserEmail = string.Empty;
+    private string newUserPassword = string.Empty;
+    private string newUserRole = "Technician";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUsers();
+    }
+
+    private async Task LoadUsers()
+    {
+        isLoading = true;
+        users.Clear();
+
+        var allUsers = UserManager.Users.ToList();
+        foreach (var user in allUsers)
+        {
+            var roles = await UserManager.GetRolesAsync(user);
+            users.Add(new UserWithRole
+            {
+                UserId = user.Id,
+                Email = user.Email ?? "",
+                Role = roles.FirstOrDefault() ?? "None",
+                EmailConfirmed = user.EmailConfirmed
+            });
+        }
+
+        users = users.OrderBy(u => u.Email).ToList();
+        isLoading = false;
+    }
+
+    private async Task AddUser()
+    {
+        if (string.IsNullOrWhiteSpace(newUserEmail) || string.IsNullOrWhiteSpace(newUserPassword) ||
+            string.IsNullOrWhiteSpace(newUserRole))
+        {
+            Snackbar.Add("Please fill in all fields", Severity.Warning);
+            return;
+        }
+
+        var user = new IdentityUser
+        {
+            UserName = newUserEmail,
+            Email = newUserEmail,
+            EmailConfirmed = true
+        };
+
+        var result = await UserManager.CreateAsync(user, newUserPassword);
+        if (result.Succeeded)
+        {
+            await UserManager.AddToRoleAsync(user, newUserRole);
+            Snackbar.Add($"User {newUserEmail} created with role {newUserRole}", Severity.Success);
+            showAddUser = false;
+            newUserEmail = string.Empty;
+            newUserPassword = string.Empty;
+            newUserRole = "Technician";
+            await LoadUsers();
+        }
+        else
+        {
+            var errors = string.Join(", ", result.Errors.Select(e => e.Description));
+            Snackbar.Add($"Error: {errors}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteUser(UserWithRole userInfo)
+    {
+        if (userInfo.Email == "admin@snappersrepair.com")
+        {
+            Snackbar.Add("Cannot delete the default admin user", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, $"Delete user {userInfo.Email}? This cannot be undone." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.Color, Color.Error }
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled)
+        {
+            var user = await UserManager.FindByIdAsync(userInfo.UserId);
+            if (user != null)
+            {
+                var deleteResult = await UserManager.DeleteAsync(user);
+                if (deleteResult.Succeeded)
+                {
+                    Snackbar.Add($"User {userInfo.Email} deleted", Severity.Success);
+                    await LoadUsers();
+                }
+                else
+                {
+                    Snackbar.Add("Error deleting user", Severity.Error);
+                }
+            }
+        }
+    }
+
+    private Color GetRoleColor(string role) => role switch
+    {
+        "Admin" => Color.Error,
+        "Technician" => Color.Info,
+        "Office" => Color.Success,
+        _ => Color.Default
+    };
+
+    private class UserWithRole
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
+        public bool EmailConfirmed { get; set; }
+    }
+}
