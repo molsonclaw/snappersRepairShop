@@ -10,6 +10,7 @@
 @inject ISnackbar Snackbar
 @inject UserManager<IdentityUser> UserManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IJSRuntime JS
 
 <PageTitle>Work Order Details</PageTitle>
 
@@ -27,11 +28,18 @@
                     @workOrder.WorkOrderNumber
                 </MudText>
                 <MudStack Row="true" Spacing="2">
-                    <MudButton Href="/workorders" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack">
+                    <MudButton Href="/workorders" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack"
+                               Class="no-print">
                         Back to List
                     </MudButton>
-                    <MudButton Href="@($"/jobs/edit/{WorkOrderId}")" Variant="Variant.Filled" 
-                               Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit">
+                    <MudButton OnClick="PrintWorkOrder" Variant="Variant.Outlined"
+                               Color="Color.Default" StartIcon="@Icons.Material.Filled.Print"
+                               Class="no-print">
+                        Print
+                    </MudButton>
+                    <MudButton Href="@($"/jobs/edit/{WorkOrderId}")" Variant="Variant.Filled"
+                               Color="Color.Primary" StartIcon="@Icons.Material.Filled.Edit"
+                               Class="no-print">
                         Edit
                     </MudButton>
                 </MudStack>
@@ -370,6 +378,11 @@
                 TimeSpan.FromHours(2)
             );
         }
+    }
+
+    private async Task PrintWorkOrder()
+    {
+        await JS.InvokeVoidAsync("window.print");
     }
 
     private Color GetStatusColor(string status)

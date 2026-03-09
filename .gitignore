@@ -91,6 +91,9 @@ appsettings.Local.json
 *.db-wal
 Snappers.db*
 
+# Publish output
+publish/
+
 # Migrations (optional - uncomment if you want to ignore migrations)
 # **/Migrations/
 
